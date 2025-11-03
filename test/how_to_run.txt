@@ -1,0 +1,13 @@
+conda activate ragModel_10  
+cd project/backend
+
+# Server Side
+python setup_and_run.py --ingest    # Build vector store
+python setup_and_run.py --run       # Start the server
+python setup_and_run.py --full      # Both
+
+# Client Side
+python chat_cli.py "Πώς κάνω restart το PostgreSQL;" # Simple one-shot query
+python chat_cli.py -i # Interactive mode
+python chat_cli.py --chat-id abc-123 "Next question" # With specific chat ID
+python chat_cli.py --new-chat "PostgreSQL Help" # Create new chat session
