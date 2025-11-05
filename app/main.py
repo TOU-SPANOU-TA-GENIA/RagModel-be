@@ -1,3 +1,15 @@
+# app/main.py
+"""
+Modified to include Agent capabilities.
+
+Changes from original:
+1. Added agent import and initialization
+2. Modified /chats/{chat_id}/message to use agent
+3. Modified /chat (simple endpoint) to use agent
+4. Added /agent/capabilities endpoint for debugging
+5. Preserved all existing functionality
+"""
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -6,7 +18,9 @@ from contextlib import asynccontextmanager
 from .models import (
     NewChatRequest, MessageRequest, ChatResponse, UploadResponse,
     ErrorResponse, HealthResponse, StatsResponse, IngestionResponse,
-    ChatSummary, ChatDetail, SourceDocument
+    ChatSummary, ChatDetail, SourceDocument,
+    # New model for agent response
+    AgentChatResponse
 )
 from .chat_manager import (
     create_chat, list_chats, append_message, get_history, get_chat,
@@ -22,7 +36,22 @@ from .exceptions import (
 )
 from .logger import setup_logger
 
+# NEW: Import agent
+from .agent import create_agent, Agent
+
 logger = setup_logger(__name__)
+
+# Global agent instance
+_agent: Agent = None
+
+
+def get_agent() -> Agent:
+    """Get or create the global agent instance."""
+    global _agent
+    if _agent is None:
+        _agent = create_agent()
+    return _agent
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,14 +65,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error initializing vector store: {e}")
     
+    # NEW: Initialize agent
+    try:
+        get_agent()
+        logger.info("Agent initialized successfully")
+    except Exception as e:
+        logger.error(f"Error initializing agent: {e}")
+    
     yield
     
     logger.info("Shutting down RAG application...")
 
 app = FastAPI(
-    title="Assistant RAG API",
-    description="Retrieval-Augmented Generation system for support",
-    version="1.0.0",
+    title="AI Agent RAG API",  # Updated title
+    description="Retrieval-Augmented Generation system with AI Agent capabilities",
+    version="2.0.0",  # Bumped version
     lifespan=lifespan
 )
 
@@ -55,6 +91,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================================================
+# Exception Handlers (unchanged)
+# ============================================================================
 
 @app.exception_handler(ChatNotFoundException)
 async def chat_not_found_handler(request, exc: ChatNotFoundException):
@@ -81,6 +121,10 @@ async def rag_exception_handler(request, exc: RAGException):
         content={"error": "RAG system error", "detail": str(exc)}
     )
 
+# ============================================================================
+# System Endpoints (unchanged)
+# ============================================================================
+
 @app.get("/stats", response_model=StatsResponse)
 async def get_system_stats():
     stats = get_stats()
@@ -100,6 +144,48 @@ async def get_system_stats():
 @app.get("/ping")
 async def ping():
     return {"ok": True, "message": "ping"}
+
+# ============================================================================
+# NEW: Agent Capabilities Endpoint
+# ============================================================================
+
+@app.get("/agent/capabilities")
+async def get_agent_capabilities():
+    """
+    Get information about agent capabilities and available tools.
+    Useful for debugging and understanding what the agent can do.
+    """
+    try:
+        agent = get_agent()
+        tool_registry = agent.tool_registry
+        
+        tools_info = []
+        for tool_name in tool_registry.list_tools():
+            tool = tool_registry.get_tool(tool_name)
+            if tool:
+                tools_info.append(tool.get_schema())
+        
+        return {
+            "agent_version": "2.0.0",
+            "capabilities": {
+                "rag_retrieval": True,
+                "tool_usage": True,
+                "multi_turn_conversation": True,
+                "intent_classification": True
+            },
+            "available_tools": tools_info,
+            "intents": ["question", "action", "conversation"]
+        }
+    except Exception as e:
+        logger.error(f"Error getting agent capabilities: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get agent capabilities"
+        )
+
+# ============================================================================
+# Chat Management Endpoints (unchanged)
+# ============================================================================
 
 @app.post("/chats", response_model=str, status_code=status.HTTP_201_CREATED)
 async def create_new_chat(req: NewChatRequest):
@@ -126,7 +212,6 @@ async def get_all_chats():
             detail="Failed to retrieve chats"
         )
 
-
 @app.get("/chats/{chat_id}", response_model=ChatDetail)
 async def get_chat_details(chat_id: str):
     try:
@@ -138,9 +223,21 @@ async def get_chat_details(chat_id: str):
             detail=str(e)
         )
 
+# ============================================================================
+# MODIFIED: Chat Message Endpoint with Agent
+# ============================================================================
 
-@app.post("/chats/{chat_id}/message", response_model=ChatResponse)
+@app.post("/chats/{chat_id}/message", response_model=AgentChatResponse)
 async def post_message_to_chat(chat_id: str, msg: MessageRequest):
+    """
+    Send a message to a chat and get an agent response.
+    
+    The agent will:
+    1. Analyze the message intent
+    2. Use tools if an action is requested
+    3. Retrieve relevant knowledge from RAG
+    4. Generate a contextual response
+    """
     try:
         # Validate chat exists
         _ = get_chat(chat_id)
@@ -149,53 +246,55 @@ async def post_message_to_chat(chat_id: str, msg: MessageRequest):
         append_message(chat_id, msg.role, msg.content)
         logger.info(f"User message received for chat {chat_id}")
         
-        # Retrieve relevant documents
-        retrieved_docs = retrieve(msg.content, k=3)
-        
-        # Format context
-        context_parts = []
-        sources = []
-        
-        for content, metadata, score in retrieved_docs:
-            source_name = metadata.get("source", "Unknown")
-            context_parts.append(f"[{source_name}]\n{content}")
-            
-            sources.append(SourceDocument(
-                content=content[:200] + "..." if len(content) > 200 else content,
-                source=source_name,
-                relevance_score=round(score, 3)
-            ))
-        
-        context_text = "\n\n".join(context_parts)
-        
         # Get conversation history (exclude the just-added user message)
         history = get_history(chat_id)[:-1]
         
-        # Build prompt
-        prompt = build_prompt(
-            system_instruction=SYSTEM_INSTRUCTION,
-            context=context_text,
-            history=history,
-            user_query=msg.content
+        # NEW: Use agent to process the query
+        agent = get_agent()
+        agent_response = agent.process_query(
+            user_query=msg.content,
+            chat_history=history,
+            use_rag=True
         )
         
-        logger.debug(f"Prompt built ({len(prompt)} chars)")
-        
-        # Generate answer
-        answer = generate_answer(prompt)
+        # Extract response components
+        answer = agent_response["answer"]
+        sources = agent_response.get("sources", [])
+        tool_used = agent_response.get("tool_used")
+        tool_result = agent_response.get("tool_result")
+        decision = agent_response.get("decision", {})
+        metadata = agent_response.get("metadata", {})
         
         # Store assistant response
         append_message(chat_id, "assistant", answer)
         
-        logger.info(f"Response generated for chat {chat_id}")
+        logger.info(f"Agent response generated for chat {chat_id}")
+        logger.info(f"  Intent: {metadata.get('intent')}")
+        logger.info(f"  Tool used: {tool_used}")
+        logger.info(f"  RAG sources: {len(sources)}")
         
-        return ChatResponse(
+        # Convert sources to SourceDocument format
+        source_docs = [
+            SourceDocument(
+                content=src["content"],
+                source=src["source"],
+                relevance_score=src["relevance_score"]
+            )
+            for src in sources
+        ]
+        
+        return AgentChatResponse(
             answer=answer,
-            sources=sources,
+            sources=source_docs,
+            tool_used=tool_used,
+            tool_result=tool_result,
             metadata={
                 "chat_id": chat_id,
+                "intent": metadata.get("intent"),
+                "used_rag": metadata.get("used_rag", False),
+                "used_tool": metadata.get("used_tool", False),
                 "num_sources": len(sources),
-                "has_context": len(context_text) > 0
+                "decision": decision
             }
         )
     
@@ -204,32 +303,68 @@ async def post_message_to_chat(chat_id: str, msg: MessageRequest):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Chat {chat_id} not found"
         )
-    except VectorStoreNotInitializedException:
-        logger.warning("Vector store not available, generating without context")
-        
-        history = get_history(chat_id)[:-1]
-        prompt = build_prompt(
-            system_instruction=SYSTEM_INSTRUCTION,
-            context="",
-            history=history,
-            user_query=msg.content
-        )
-        
-        answer = generate_answer(prompt)
-        append_message(chat_id, "assistant", answer)
-        
-        return ChatResponse(
-            answer=answer,
-            sources=[],
-            metadata={"warning": "No knowledge base available"}
-        )
     except Exception as e:
-        logger.error(f"Error processing message: {e}")
+        logger.error(f"Error processing message: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process message"
         )
 
+# ============================================================================
+# MODIFIED: Simple Chat Endpoint with Agent
+# ============================================================================
+
+@app.post("/chat", response_model=AgentChatResponse)
+async def simple_chat(msg: MessageRequest):
+    """
+    Stateless chat endpoint using agent.
+    No conversation history maintained.
+    """
+    try:
+        agent = get_agent()
+        agent_response = agent.process_query(
+            user_query=msg.content,
+            chat_history=[],
+            use_rag=True
+        )
+        
+        answer = agent_response["answer"]
+        sources = agent_response.get("sources", [])
+        tool_used = agent_response.get("tool_used")
+        tool_result = agent_response.get("tool_result")
+        metadata = agent_response.get("metadata", {})
+        
+        source_docs = [
+            SourceDocument(
+                content=src["content"],
+                source=src["source"],
+                relevance_score=src["relevance_score"]
+            )
+            for src in sources
+        ]
+        
+        return AgentChatResponse(
+            answer=answer,
+            sources=source_docs,
+            tool_used=tool_used,
+            tool_result=tool_result,
+            metadata={
+                "intent": metadata.get("intent"),
+                "used_rag": metadata.get("used_rag", False),
+                "used_tool": metadata.get("used_tool", False)
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"Error in simple chat: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process query"
+        )
+
+# ============================================================================
+# History and Management Endpoints (unchanged)
+# ============================================================================
 
 @app.get("/chats/{chat_id}/history")
 async def get_chat_history(chat_id: str):
@@ -264,51 +399,10 @@ async def delete_chat_endpoint(chat_id: str):
             detail=f"Chat {chat_id} not found"
         )
 
-@app.post("/chat", response_model=ChatResponse)
-async def simple_chat(msg: MessageRequest):
-    try:
-        retrieved_docs = retrieve(msg.content, k=3)
-        
-        context_parts = []
-        sources = []
-        
-        for content, metadata, score in retrieved_docs:
-            source_name = metadata.get("source", "Unknown")
-            context_parts.append(f"[{source_name}]\n{content}")
-            
-            sources.append(SourceDocument(
-                content=content[:200] + "..." if len(content) > 200 else content,
-                source=source_name,
-                relevance_score=round(score, 3)
-            ))
-        
-        context_text = "\n\n".join(context_parts)
-        
-        prompt = build_prompt(
-            system_instruction=SYSTEM_INSTRUCTION,
-            context=context_text,
-            history=[],
-            user_query=msg.content
-        )
-        
-        answer = generate_answer(prompt)
-        
-        return ChatResponse(
-            answer=answer,
-            sources=sources
-        )
-    
-    except Exception as e:
-        logger.error(f"Error in simple chat: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process query"
-        )
+# ============================================================================
+# Document Upload and Ingestion (unchanged)
+# ============================================================================
 
-
-# Upload a new file to the knowledge base.
-# Note: File is saved but not automatically indexed.
-# Call /ingest/file/{filename} to index it.
 @app.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_file(file: UploadFile = File(...)):
     try:
@@ -326,7 +420,6 @@ async def upload_file(file: UploadFile = File(...)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload file: {str(e)}"
         )
-
 
 @app.post("/ingest/file/{filename}", response_model=IngestionResponse)
 async def ingest_file(filename: str):
@@ -349,7 +442,6 @@ async def ingest_file(filename: str):
             detail=str(e)
         )
 
-# Ingest all documents from the knowledge directory.
 @app.post("/ingest/all", response_model=IngestionResponse)
 async def ingest_all_documents(rebuild: bool = False):
     try:
@@ -370,8 +462,6 @@ async def ingest_all_documents(rebuild: bool = False):
             detail=str(e)
         )
 
-# Search the vector store directly without generating an answer.
-# Useful for testing retrieval quality.
 @app.get("/search")
 async def search_documents(q: str, k: int = 3):
     try:
@@ -406,7 +496,10 @@ async def search_documents(q: str, k: int = 3):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Search failed"
         )
-        
+
+# ============================================================================
+# Health Check (updated with agent info)
+# ============================================================================
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -423,13 +516,22 @@ async def health_check():
     
     knowledge_dir_ok = KNOWLEDGE_DIR.exists()
     
+    # Check agent
+    agent_ok = False
+    try:
+        get_agent()
+        agent_ok = True
+    except:
+        pass
+    
     # Get GPU info
     gpu_info = get_gpu_info()
     
     services = {
         "vector_store": vector_store_ok,
         "knowledge_directory": knowledge_dir_ok,
-        "llm": True
+        "llm": True,
+        "agent": agent_ok  # NEW
     }
     
     if gpu_info:
@@ -439,7 +541,7 @@ async def health_check():
         services["gpu"] = False
     
     return {
-        "status": "healthy" if vector_store_ok else "degraded",
+        "status": "healthy" if (vector_store_ok and agent_ok) else "degraded",
         "timestamp": datetime.utcnow().isoformat(),
         "services": services
     }

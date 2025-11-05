@@ -1,5 +1,4 @@
-conda activate ragModel_10  
-cd project/backend
+conda activate ragModel_10
 
 # Server Side
 python setup_and_run.py --ingest    # Build vector store

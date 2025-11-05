@@ -81,3 +81,18 @@ class StatsResponse(BaseModel):
     total_messages: int
     avg_messages_per_chat: float
     vector_store_initialized: bool
+    
+class AgentChatResponse(BaseModel):
+    """
+    Response from agent-powered chat endpoint.
+    
+    Extends ChatResponse with agent-specific information.
+    """
+    answer: str
+    sources: List[SourceDocument]
+    tool_used: Optional[str] = Field(None, description="Name of tool used, if any")
+    tool_result: Optional[Dict[str, Any]] = Field(None, description="Result from tool execution")
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, 
+        description="Additional metadata including intent, decision info"
+    )
