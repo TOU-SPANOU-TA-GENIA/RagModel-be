@@ -29,7 +29,12 @@ import re
 from .tools import get_tool_registry, ToolResult, ToolRegistry
 from ..llm import generate_answer, build_prompt
 from ..vectorstore import retrieve
-from ..config import SYSTEM_INSTRUCTION
+from ..config import (
+    SYSTEM_INSTRUCTION,
+    AGENT_SHOW_FILE_CONTENT,
+    AGENT_FILE_CONTENT_FORMAT,
+    AGENT_MAX_CONTENT_DISPLAY_LINES
+)
 from ..logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -105,9 +110,10 @@ class ActionParser:
             Dictionary with tool and parameters, or None if no action found
         """
         # Look for <ACTION>...</ACTION> tags
+        print(f"ActionParser.extract_action: text={text}")
         pattern = r'<ACTION>(.*?)</ACTION>'
         match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-        
+        print(f"ActionParser.extract_action: match={match}")
         if not match:
             return None
         
@@ -118,6 +124,7 @@ class ActionParser:
             action_data = json.loads(action_text)
             
             # Validate structure
+            print(f"Parsed action data: {action_data}")
             if "tool" not in action_data:
                 logger.warning("Action missing 'tool' field")
                 return None
@@ -166,6 +173,10 @@ class Agent:
         self.tool_registry = tool_registry or get_tool_registry()
         logger.info(f"Agent initialized with {len(self.tool_registry.list_tools())} tools")
     
+    # app/agent/core.py - Replace the existing method (around line 160)
+
+    # app/agent/core.py - Replace _build_system_prompt_with_tools method
+
     def _build_system_prompt_with_tools(self) -> str:
         """
         Build enhanced system prompt that includes tool descriptions.
@@ -180,73 +191,133 @@ class Agent:
         if not tool_schemas:
             return base_instruction
         
-        # Build tools section
-        tools_description = "\n\n## AVAILABLE TOOLS\n\n"
-        tools_description += "You have access to the following tools to help users:\n\n"
+        # Build tools section with VERY CLEAR instructions
+        tools_description = """
+
+    ==========================================================================
+    YOU ARE AN AI AGENT WITH TWO CAPABILITIES
+    ==========================================================================
+
+    1. ANSWERING QUESTIONS using your knowledge base (context provided)
+    2. PERFORMING ACTIONS using tools (when user asks you to DO something)
+
+    ## CRITICAL RULES - READ CAREFULLY
+
+    ### WHEN TO ANSWER DIRECTLY (WITHOUT TOOLS):
+    - User asks a QUESTION (what, who, where, why, how, when)
+    - Information is available in the <context> section
+    - User wants to know/learn something
+    - Examples:
+    ✓ "What is Panos favorite food?" → Answer from context
+    ✓ "Where does Panos live?" → Answer from context  
+    ✓ "Tell me about X" → Answer from context
+    ✓ "What does the config say?" → Answer from context
+
+    ### WHEN TO USE TOOLS:
+    - User asks you to DO/PERFORM an action
+    - User wants you to READ/OPEN/SHOW a FILE
+    - Information is NOT in the context
+    - Examples:
+    ✓ "Read the file at /data/config.txt" → Use tool
+    ✓ "Show me what's in test.txt" → Use tool
+    ✓ "Open the log file" → Use tool
+
+    ==========================================================================
+    YOUR AVAILABLE TOOLS
+    ==========================================================================
+    """
         
         for tool in tool_schemas:
-            tools_description += f"### {tool['name']}\n"
-            tools_description += f"{tool['description']}\n\n"
-            tools_description += "Parameters:\n"
+            tools_description += f"\n**{tool['name']}** - {tool['description']}\n"
+            tools_description += "   Parameters:\n"
             
             for param_name, param_info in tool['parameters'].items():
                 required = "REQUIRED" if param_info.get('required') else "optional"
-                tools_description += f"  - {param_name} ({param_info['type']}, {required}): "
+                tools_description += f"      • {param_name} ({param_info['type']}, {required}): "
                 tools_description += f"{param_info['description']}\n"
-            
-            tools_description += "\n"
         
-        # Add usage instructions
         tools_description += """
-## HOW TO USE TOOLS
 
-When a user asks you to perform an action that requires a tool:
+    ==========================================================================
+    HOW TO USE TOOLS
+    ==========================================================================
 
-1. Identify which tool is needed
-2. Extract the required parameters from the user's request
-3. Output the action in this EXACT format:
+    ONLY when the user explicitly asks you to perform an action, output:
 
-<ACTION>
-{
-    "tool": "tool_name",
-    "parameters": {
-        "param1": "value1",
-        "param2": "value2"
+    <ACTION>
+    {
+        "tool": "tool_name",
+        "parameters": {
+            "param": "value"
+        }
     }
-}
-</ACTION>
+    </ACTION>
 
-4. After the action tag, you can add explanation text for the user
+    Then add explanation text.
 
-IMPORTANT:
-- Only use tools when the user explicitly asks for an action
-- For questions, answer normally without using tools
-- Always validate that you have the required parameters
-- Use the RAG knowledge base for information queries
+    ==========================================================================
+    EXAMPLES - STUDY THESE
+    ==========================================================================
 
-Example:
-User: "Can you read the config file at /data/app.conf?"
-Your response:
-<ACTION>
-{
-    "tool": "read_file",
-    "parameters": {
-        "file_path": "/data/app.conf"
+    Example 1 - QUESTION (Answer directly, NO tool):
+    Context: [backup_guide.txt] panos favorite food is: souvlaki
+    User: "What is Panos favorite food?"
+    You: "Panos's favorite food is souvlaki."
+
+    Example 2 - QUESTION (Answer directly, NO tool):
+    Context: [linux_user_guide.txt] he lives in pefki
+    User: "Where does Panos live?"
+    You: "Panos lives in Pefki."
+
+    Example 3 - ACTION (Use tool):
+    User: "Read the file at /data/config.txt"
+    You:
+    <ACTION>
+    {
+        "tool": "read_file",
+        "parameters": {
+            "file_path": "/data/config.txt"
+        }
     }
-}
-</ACTION>
+    </ACTION>
 
-I'll read that configuration file for you.
-"""
+    I'll read that file for you.
+
+    Example 4 - ACTION (Use tool):
+    User: "Show me what's in notes.txt"
+    You:
+    <ACTION>
+    {
+        "tool": "read_file",
+        "parameters": {
+            "file_path": "notes.txt"
+        }
+    }
+    </ACTION>
+
+    Let me open that file.
+
+    ==========================================================================
+    REMEMBER
+    ==========================================================================
+
+    IF context is provided → Answer from context (NO TOOL)
+    IF user asks to read/open a file → Use read_file tool
+    IF user asks a question and NO context → Say you don't know
+
+    DO NOT use tools to answer questions when context is already provided!
+
+    ==========================================================================
+    """
         
         return base_instruction + tools_description
-    
+    # app/agent/core.py - Replace the _analyze_intent method (around line 180)
+
+    # app/agent/core.py - Replace _analyze_intent method
+
     def _analyze_intent(self, user_query: str) -> AgentIntent:
         """
         Analyze the user's query to determine intent.
-        
-        This is a simple heuristic-based approach. For more complex
-        scenarios, you could use a separate LLM call for classification.
         
         Args:
             user_query: The user's input text
@@ -256,45 +327,88 @@ I'll read that configuration file for you.
         """
         query_lower = user_query.lower().strip()
         
-        # Action keywords - things that suggest the user wants something done
-        action_keywords = [
-            'read', 'open', 'show me', 'display', 'execute', 'run',
-            'create', 'write', 'update', 'delete', 'modify',
-            'check', 'get', 'fetch', 'find file', 'look at'
+        # File-related action keywords - EXPANDED LIST
+        file_action_keywords = [
+            'read', 'open', 'show', 'display', 'view', 'check', 'see',
+            'get', 'fetch', 'look at', 'look in', 'what\'s in',
+            'content of', 'contents of', 'file at', 'file called',
+            'cat', 'show me', 'display the', 'read the'
         ]
         
-        # Question keywords - things that suggest information request
+        # File indicators
+        file_indicators = [
+            '.txt', '.log', '.conf', '.json', '.py', '.md',
+            'file', 'document', 'config', 'configuration'
+        ]
+        
+        # Other action keywords
+        other_action_keywords = [
+            'execute', 'run', 'create', 'write', 'update', 
+            'delete', 'modify', 'start', 'stop'
+        ]
+        
+        # Question keywords - EXPANDED
         question_keywords = [
-            'what', 'how', 'why', 'when', 'where', 'who',
-            'explain', 'describe', 'tell me about', 'what is',
-            'can you explain', 'do you know'
+            'what', 'how', 'why', 'when', 'where', 'who', 'which',
+            'explain', 'describe', 'tell me', 'what is', 'who is',
+            'can you explain', 'do you know', 'what does',
+            'tell me about', 'information about', 'details about'
+        ]
+        
+        # Information-seeking patterns (even without explicit question words)
+        info_patterns = [
+            'favorite', 'live', 'lives', 'location', 'address',
+            'like', 'prefer', 'enjoy', 'loves', 'hates',
+            'works at', 'job', 'age', 'name', 'email',
+            'phone', 'contact', 'birthday', 'from'
         ]
         
         # Conversational keywords
         conversation_keywords = [
             'hello', 'hi', 'hey', 'thanks', 'thank you',
-            'goodbye', 'bye', 'ok', 'okay', 'yes', 'no'
+            'goodbye', 'bye', 'ok', 'okay', 'good'
         ]
         
-        # Check for action intent
-        for keyword in action_keywords:
+        # PRIORITY 1: Check for file reading intent
+        # If they mention file actions + file indicators → ACTION
+        has_file_action = any(keyword in query_lower for keyword in file_action_keywords)
+        has_file_indicator = any(indicator in query_lower for indicator in file_indicators)
+        
+        if has_file_action or has_file_indicator:
+            # Make sure it's not a question about HOW to do something
+            if not any(q in query_lower for q in ['how to', 'how do i', 'how can i', 'how should i']):
+                logger.info(f"Detected ACTION intent (file operation): {user_query[:50]}...")
+                return AgentIntent.ACTION
+        
+        # PRIORITY 2: Check for other action keywords
+        for keyword in other_action_keywords:
             if keyword in query_lower:
-                # But make sure it's not a question about how to do something
                 if not any(q in query_lower for q in ['how to', 'how do i', 'how can i']):
+                    logger.info(f"Detected ACTION intent: {user_query[:50]}...")
                     return AgentIntent.ACTION
         
-        # Check for question intent
+        # PRIORITY 3: Check for short conversational greetings ONLY
+        # Only classify as conversation if it's JUST a greeting (short query)
+        if len(query_lower.split()) <= 3:  # Short queries only
+            if any(keyword == query_lower or query_lower.startswith(keyword) for keyword in conversation_keywords):
+                logger.info(f"Detected CONVERSATION intent: {user_query[:50]}...")
+                return AgentIntent.CONVERSATION
+        
+        # PRIORITY 4: Check for information-seeking patterns
+        # This catches "Panos favorite food" style queries
+        if any(pattern in query_lower for pattern in info_patterns):
+            logger.info(f"Detected QUESTION intent (info pattern): {user_query[:50]}...")
+            return AgentIntent.QUESTION
+        
+        # PRIORITY 5: Check for explicit question keywords
         for keyword in question_keywords:
             if keyword in query_lower or query_lower.endswith('?'):
+                logger.info(f"Detected QUESTION intent: {user_query[:50]}...")
                 return AgentIntent.QUESTION
         
-        # Check for conversation
-        if any(keyword in query_lower for keyword in conversation_keywords):
-            return AgentIntent.CONVERSATION
-        
-        # Default to question if unsure
+        # Default to QUESTION if unsure (better to search than to ignore)
+        logger.info(f"Defaulting to QUESTION intent: {user_query[:50]}...")
         return AgentIntent.QUESTION
-    
     def _make_decision(self, user_query: str, intent: AgentIntent) -> AgentDecision:
         """
         Decide how to handle the query based on intent analysis.
@@ -353,7 +467,9 @@ I'll read that configuration file for you.
             (ToolResult if action was executed, cleaned text without action tags)
         """
         # Extract action from output
+        print(f"llm_output: {llm_output}")
         action = ActionParser.extract_action(llm_output)
+        print(f"Extracted action: {action}")
         
         if action is None:
             # No action found, return original text
@@ -407,6 +523,8 @@ I'll read that configuration file for you.
         # Generic format for unknown tools
         return f"Tool result: {json.dumps(tool_result.data, indent=2)}"
     
+    # app/agent/core.py - Replace the section around line 400-450
+
     def process_query(
         self,
         user_query: str,
@@ -415,25 +533,6 @@ I'll read that configuration file for you.
     ) -> Dict[str, Any]:
         """
         Main entry point - process a user query and return response.
-        
-        This orchestrates the entire agent workflow:
-        1. Analyze intent
-        2. Make decision
-        3. Execute tools if needed
-        4. Generate response
-        
-        Args:
-            user_query: The user's question or command
-            chat_history: Previous messages in the conversation
-            use_rag: Whether to use RAG for knowledge retrieval
-            
-        Returns:
-            Dictionary with:
-                - answer: The agent's response text
-                - tool_used: Name of tool if any was used
-                - tool_result: Result from tool execution
-                - sources: RAG sources if used
-                - decision: The agent's decision (for debugging)
         """
         if chat_history is None:
             chat_history = []
@@ -443,6 +542,12 @@ I'll read that configuration file for you.
         # Step 1: Analyze intent
         intent = self._analyze_intent(user_query)
         logger.info(f"Detected intent: {intent.value}")
+        
+        print(f"\n{'='*70}")
+        print(f"DEBUG: Query: {user_query}")
+        print(f"DEBUG: Intent: {intent.value}")
+        print(f"DEBUG: Will use RAG: {use_rag and intent in [AgentIntent.QUESTION, AgentIntent.ACTION]}")
+        print(f"{'='*70}\n")
         
         # Step 2: Make decision
         decision = self._make_decision(user_query, intent)
@@ -490,6 +595,7 @@ I'll read that configuration file for you.
         # Step 6: Check if LLM wants to use a tool
         tool_result = None
         tool_used = None
+        final_answer = llm_output  # Default to LLM output
         
         if decision.use_tool:
             tool_result, llm_output = self._execute_tool_from_llm_output(llm_output)
@@ -498,30 +604,57 @@ I'll read that configuration file for you.
                 tool_used = tool_result.tool_name
                 logger.info(f"Tool executed: {tool_used}, success: {tool_result.success}")
                 
-                # If tool execution was successful, generate final response with results
+                # NEW: Format the final answer with file content
                 if tool_result.success:
-                    tool_context = self._format_tool_result_for_llm(tool_result)
-                    
-                    # Build new prompt with tool results
-                    final_prompt = build_prompt(
-                        system_instruction=system_prompt,
-                        context=f"{context_text}\n\n## TOOL EXECUTION RESULT\n{tool_context}",
-                        history=chat_history,
-                        user_query=user_query
-                    )
-                    
-                    # Add instruction to use the tool result
-                    final_prompt += "\n\nThe tool has been executed successfully. Use the tool result above to provide a complete answer to the user."
-                    
-                    logger.info("Generating final response with tool results...")
-                    llm_output = generate_answer(final_prompt)
+                    if tool_used == "read_file" and AGENT_SHOW_FILE_CONTENT:
+                        data = tool_result.data
+                        file_path = data.get("file_path", "")
+                        file_content = data.get("content", "")
+                        lines = data.get("lines", 0)
+                        file_size = data.get("file_size_bytes", 0)
+                        
+                        # Truncate if needed
+                        display_content = file_content
+                        truncated = False
+                        if AGENT_MAX_CONTENT_DISPLAY_LINES:
+                            content_lines = file_content.split('\n')
+                            if len(content_lines) > AGENT_MAX_CONTENT_DISPLAY_LINES:
+                                display_content = '\n'.join(content_lines[:AGENT_MAX_CONTENT_DISPLAY_LINES])
+                                display_content += f"\n\n... (showing first {AGENT_MAX_CONTENT_DISPLAY_LINES} of {lines} lines)"
+                                truncated = True
+                        
+                        # Format based on config
+                        if AGENT_FILE_CONTENT_FORMAT == "pretty":
+                            final_answer = f"{llm_output.strip()}\n\n"
+                            final_answer += f"{'='*70}\n"
+                            final_answer += f"File: {file_path}\n"
+                            final_answer += f"Size: {file_size} bytes | Lines: {lines}\n"
+                            final_answer += f"{'='*70}\n\n"
+                            final_answer += display_content
+                            if truncated:
+                                final_answer += f"\n\n{'='*70}\n"
+                                final_answer += f"(File truncated for display)\n"
+                        
+                        elif AGENT_FILE_CONTENT_FORMAT == "minimal":
+                            final_answer = f"{llm_output.strip()}\n\n"
+                            final_answer += f"[{file_path}]\n"
+                            final_answer += display_content
+                        
+                        else:  # raw
+                            final_answer = f"{llm_output.strip()}\n\n{display_content}"
+                        
+                        logger.info(f"Added file content to answer ({len(display_content)} chars)")
+                    else:
+                        # Other tools or file content display disabled
+                        tool_context = self._format_tool_result_for_llm(tool_result)
+                        final_answer = f"{llm_output.strip()}\n\n{tool_context}"
                 else:
-                    # Tool failed, inform user
-                    llm_output = f"I tried to perform that action, but encountered an error: {tool_result.error}\n\n{llm_output}"
+                    # Tool failed
+                    final_answer = f"I tried to perform that action, but encountered an error: {tool_result.error}\n\n{llm_output}"
         
         # Step 7: Return complete response
         response = {
-            "answer": llm_output.strip(),
+            "answer": final_answer.strip(),
             "tool_used": tool_used,
             "tool_result": tool_result.to_dict() if tool_result else None,
             "sources": rag_sources,
@@ -536,7 +669,6 @@ I'll read that configuration file for you.
         logger.info(f"Agent response complete. Tool used: {tool_used}, RAG sources: {len(rag_sources)}")
         
         return response
-
 
 def create_agent() -> Agent:
     """

@@ -9,7 +9,8 @@ Changes from original:
 4. Added /agent/capabilities endpoint for debugging
 5. Preserved all existing functionality
 """
-
+from .offline_mode import disable_network
+disable_network()
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -356,6 +357,7 @@ async def simple_chat(msg: MessageRequest):
         )
     
     except Exception as e:
+        
         logger.error(f"Error in simple chat: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

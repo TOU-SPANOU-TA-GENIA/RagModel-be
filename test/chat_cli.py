@@ -95,6 +95,7 @@ def send_message(message: str, chat_id: Optional[str] = None) -> dict:
             url = f"{BASE_URL}/chat"
         
         print("message: ", message)
+        print("url: ", url)
         response = requests.post(
             url,
             json={"role": "user", "content": message},

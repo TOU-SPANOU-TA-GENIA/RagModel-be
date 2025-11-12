@@ -8,6 +8,7 @@ class NewChatRequest(BaseModel):
 
 
 class MessageRequest(BaseModel):
+    
     role: str = Field(default="user", pattern="^(user|assistant|system)$")
     content: str = Field(..., min_length=1, max_length=10000)
     

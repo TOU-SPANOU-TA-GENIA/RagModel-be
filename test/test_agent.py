@@ -115,12 +115,7 @@ class AgentDemo:
         """Create sample files for demonstration."""
         # Config file
         config_file = self.test_dir / "test.txt"
-        config_file.write_text("""# Server Configuration
-host=192.168.1.100
-port=8080
-database=production_db
-max_connections=100
-timeout=30
+        config_file.write_text("""panos favorite food is souvlaki
 """)
         
         # Log file

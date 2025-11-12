@@ -12,7 +12,11 @@ Design Philosophy:
 - Tools validate their inputs before execution
 - Tools log their actions for debugging
 """
-
+from ..config import (
+    AGENT_ALLOWED_DIRECTORIES,
+    AGENT_MAX_FILE_SIZE_MB,
+    AGENT_ALLOWED_EXTENSIONS
+)
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -133,25 +137,21 @@ class ReadFileTool(Tool):
     Tool for reading file contents from the local filesystem.
     
     Security considerations:
-    - Only reads from whitelisted directories
+    - Only reads from whitelisted directories (configured in config.py)
     - Validates file paths to prevent directory traversal
     - Limits file size to prevent memory issues
     - Only reads text files (configurable extensions)
     
     Example usage by agent:
-        "I need to read the config file at /data/config.txt"
-        -> Tool reads and returns file content
+        User: "Read the config file at /data/config.txt"
+        User: "Show me what's in the notes.txt file"
+        User: "Can you check the logs at /data/knowledge/backup_guide.txt"
     """
     
-    # Configuration
-    ALLOWED_DIRECTORIES = [
-        Path("/data"),
-        Path("/app/data"),
-        Path("/home/user/documents"),  # Adjust to your server paths
-    ]
-    
-    ALLOWED_EXTENSIONS = {'.txt', '.md', '.json', '.yaml', '.yml', '.conf', '.log', '.py'}
-    MAX_FILE_SIZE_MB = 10
+    # Configuration from config.py
+    ALLOWED_DIRECTORIES = AGENT_ALLOWED_DIRECTORIES
+    MAX_FILE_SIZE_MB = AGENT_MAX_FILE_SIZE_MB
+    ALLOWED_EXTENSIONS = AGENT_ALLOWED_EXTENSIONS
     
     @property
     def name(self) -> str:
@@ -296,6 +296,7 @@ class ReadFileTool(Tool):
                     tool_name=self.name
                 )
             
+            print(f"content: {content}")
             logger.info(f"ReadFileTool: Successfully read {len(content)} characters from {file_path}")
             
             return ToolResult(
@@ -397,6 +398,7 @@ class ToolRegistry:
         logger.info(f"Executing tool: {tool_name} with params: {list(params.keys())}")
         try:
             result = tool.execute(**params)
+            print(f"Tool {tool_name} executed with result: {result.to_dict()}")
             return result
         except Exception as e:
             logger.error(f"Tool execution failed: {tool_name}", exc_info=True)

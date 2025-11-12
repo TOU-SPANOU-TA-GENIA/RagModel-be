@@ -168,10 +168,14 @@ def build_prompt(
         
         prompt_parts.append("</|history|>\n")
     
+    # Make context VERY obvious
     if context:
         prompt_parts.append("<|context|>")
-        prompt_parts.append("Info From Database:")
+        prompt_parts.append("=" * 70)
+        prompt_parts.append("KNOWLEDGE BASE - Use this information to answer questions!")
+        prompt_parts.append("=" * 70)
         prompt_parts.append(context)
+        prompt_parts.append("=" * 70)
         prompt_parts.append("</|context|>\n")
     
     prompt_parts.append("<|query|>")
@@ -181,7 +185,6 @@ def build_prompt(
     prompt_parts.append("Assistant:")
     
     return "\n".join(prompt_parts)
-
 
 def generate_answer(prompt: str, max_retries: int = 2) -> str:
     for attempt in range(max_retries + 1):
