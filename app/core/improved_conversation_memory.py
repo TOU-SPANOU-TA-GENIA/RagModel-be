@@ -1,6 +1,7 @@
-# app/core/conversation_memory.py
+# app/core/improved_conversation_memory.py
 """
-Enhanced conversation memory system that maintains context across messages.
+Improved conversation memory with better instruction storage.
+Uses meaningful names instead of "rule_0", "rule_1", etc.
 """
 
 from typing import Dict, List, Any, Optional
@@ -8,6 +9,8 @@ from dataclasses import dataclass, field
 import uuid
 import time
 from threading import Lock
+import re
+import hashlib
 
 from app.logger import setup_logger
 
@@ -45,80 +48,160 @@ class ConversationContext:
         if not self.user_instructions:
             return ""
         
-        summary = ["## Conversation Instructions:"]
+        summary = ["Active Instructions:"]
         for key, instruction in self.user_instructions.items():
-            summary.append(f"- {instruction}")
+            if isinstance(instruction, dict):
+                summary.append(f"- {instruction.get('description', instruction)}")
+            else:
+                summary.append(f"- {instruction}")
         
         return "\n".join(summary)
     
     def _is_instruction(self, content: str) -> bool:
         """Check if message contains user instructions."""
         instruction_keywords = [
-            "when i say", "you will answer", "remember that", 
-            "always respond", "never say", "follow this rule"
+            "when i say", "you will answer", "respond with", "always respond",
+            "always be", "never say", "follow this rule", "remember to",
+            "end with", "i prefer", "keep it"
         ]
         content_lower = content.lower()
         return any(keyword in content_lower for keyword in instruction_keywords)
     
     def _store_instruction(self, content: str):
-        """Extract and store user instructions with better parsing."""
+        """Extract and store user instructions with meaningful naming."""
         content_lower = content.lower()
         
         # Enhanced patterns for instruction detection
         patterns = [
             # Response rules: "when I say X, respond Y"
-            (r'when\s+i\s+say\s+["\']?([^"\']+?)["\']?\s*,?\s*(?:you\s+)?(?:respond|answer|say)(?:\s+with)?\s+["\']?([^"\']+?)["\']?(?:\.|$)', 1, 2),
-            # Simpler: "X means Y"
-            (r'["\']([^"\']{2,20})["\']?\s+means\s+["\']?([^"\']+?)["\']?(?:\.|$)', 1, 2),
-            # Behavioral: "always do X"
-            (r'always\s+(.*?)(?:\.|$)', 0, 1),
-            # Constraint: "never do X"  
-            (r'never\s+(.*?)(?:\.|$)', 0, 1),
+            (r'when\s+i\s+say\s+["\']?([^"\']+?)["\']?\s*,?\s*(?:you\s+)?(?:respond|answer|say)(?:\s+with)?\s+["\']?([^"\']+?)["\']?(?:\.|$)', 
+             'response_trigger', 1, 2),
+            
+            # Behavioral: "always be X"
+            (r'always\s+be\s+([^\.,]+)', 'behavior', 0, 1),
+            
+            # Behavioral: "always X"
+            (r'always\s+([^\.,]{3,50})', 'behavior', 0, 1),
+            
             # Format: "end with X"
-            (r'end(?:\s+your)?(?:\s+responses?)?\s+with\s+["\']?([^"\']+?)["\']?(?:\.|$)', 0, 1),
+            (r'end(?:\s+your)?(?:\s+responses?)?\s+with\s+["\']?([^"\']+?)["\']?(?:\.|$)', 
+             'format', 0, 1),
+            
+            # Preference: "I prefer X"
+            (r'i\s+prefer\s+([^\.,]{3,50})', 'preference', 0, 1),
+            
+            # Preference: "keep it X"
+            (r'keep\s+it\s+([^\.,]{3,50})', 'preference', 0, 1),
+            
+            # Never rules
+            (r'never\s+([^\.,]{3,50})', 'constraint', 0, 1),
         ]
         
-        import re
-        import hashlib
-        for pattern, trigger_group, response_group in patterns:
+        for pattern_info in patterns:
+            pattern = pattern_info[0]
+            instruction_type = pattern_info[1]
+            trigger_group = pattern_info[2]
+            response_group = pattern_info[3]
+            
             match = re.search(pattern, content_lower, re.IGNORECASE)
             if match:
                 try:
-                    trigger = match.group(trigger_group).strip().strip('"\'') if trigger_group > 0 else None
-                    response = match.group(response_group).strip().strip('"\'')
-                    
-                    if trigger and response:
-                        key = f"trigger_{hashlib.md5(trigger.encode()).hexdigest()[:8]}"
+                    # Generate meaningful key
+                    if instruction_type == 'response_trigger':
+                        trigger = match.group(trigger_group).strip().strip('"\'')
+                        response = match.group(response_group).strip().strip('"\'')
+                        
+                        # Create hash-based key for uniqueness
+                        key = f"trigger_{self._hash_text(trigger)[:8]}"
+                        
                         self.user_instructions[key] = {
+                            'type': 'response_trigger',
                             'trigger': trigger,
                             'response': response,
                             'description': f"When you say '{trigger}', I respond '{response}'"
-        }
-                    elif response:
-                        # Store behavioral instruction
-                        self.user_instructions[f"rule_{len(self.user_instructions)}"] = response
-                        logger.info(f"📝 Stored rule: '{response}'")
-                    else:
-                        key = f"behavior_{hashlib.md5(content.encode()).hexdigest()[:8]}"
-                        self.user_instructions[key] = {
-                            'type': 'behavior',
-                            'value': content,
-                            'description': content
                         }
+                        logger.info(f"📝 Stored trigger: '{trigger}' -> '{response}'")
+                        
+                    else:
+                        value = match.group(response_group).strip().strip('"\'')
+                        
+                        # Create descriptive key
+                        key = f"{instruction_type}_{self._hash_text(value)[:8]}"
+                        
+                        self.user_instructions[key] = {
+                            'type': instruction_type,
+                            'value': value,
+                            'description': f"{instruction_type.capitalize()}: {value}"
+                        }
+                        logger.info(f"📝 Stored {instruction_type}: '{value}'")
+                    
                     return
-                except IndexError:
+                    
+                except (IndexError, AttributeError) as e:
+                    logger.debug(f"Pattern match error: {e}")
                     continue
         
-        # If patterns didn't match but looks like instruction, store anyway
+        # Fallback: store as general instruction
         if any(word in content_lower for word in ["when i say", "always", "never", "remember"]):
-            self.user_instructions[f"instruction_{len(self.user_instructions)}"] = content
-            logger.info(f"📝 Stored general instruction: '{content[:50]}'")
+            key = f"instruction_{self._hash_text(content)[:8]}"
+            self.user_instructions[key] = {
+                'type': 'general',
+                'value': content,
+                'description': content[:100]
+            }
+            logger.info(f"📝 Stored general instruction")
+    
+    def _hash_text(self, text: str) -> str:
+        """Generate short hash for text."""
+        return hashlib.md5(text.encode()).hexdigest()
+    
+    def check_trigger_match(self, query: str) -> Optional[str]:
+        """Check if query matches any response triggers."""
+        query_lower = query.lower().strip()
+        
+        for instruction in self.user_instructions.values():
+            if isinstance(instruction, dict) and instruction.get('type') == 'response_trigger':
+                trigger = instruction.get('trigger', '').lower()
+                response = instruction.get('response', '')
+                
+                if self._matches_trigger(query_lower, trigger):
+                    return response
+        
+        return None
+    
+    def _matches_trigger(self, query: str, trigger: str) -> bool:
+        """Check if query matches trigger with flexible matching."""
+        # Exact match
+        if query == trigger:
+            return True
+        
+        # Contains match
+        if trigger in query:
+            return True
+        
+        # Word boundary match for short triggers
+        if len(trigger) <= 15:
+            pattern = r'\b' + re.escape(trigger) + r'\b'
+            if re.search(pattern, query):
+                return True
+        
+        return False
+    
+    def get_active_behaviors(self) -> List[str]:
+        """Get list of active behavioral instructions."""
+        behaviors = []
+        
+        for instruction in self.user_instructions.values():
+            if isinstance(instruction, dict):
+                inst_type = instruction.get('type')
+                if inst_type in ['behavior', 'preference', 'format']:
+                    behaviors.append(instruction.get('description', ''))
+        
+        return behaviors
 
 
 class ConversationMemory:
-    """
-    Manages conversation memory across sessions.
-    """
+    """Manages conversation memory across sessions."""
     
     def __init__(self, max_sessions: int = 100, session_timeout: int = 3600):
         self.sessions: Dict[str, ConversationContext] = {}
@@ -182,6 +265,7 @@ class ConversationMemory:
         
         if sessions_to_delete:
             logger.info(f"Cleaned up {len(sessions_to_delete)} old sessions")
+
 
 # Global conversation memory
 conversation_memory = ConversationMemory()

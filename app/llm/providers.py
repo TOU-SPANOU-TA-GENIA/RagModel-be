@@ -16,6 +16,22 @@ from app.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+from app.llm.response_cleaner import clean_response
+
+class YourLLMProvider(LLMProvider):
+    
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate response with automatic cleaning."""
+        
+        # Generate raw response
+        raw_response = self._generate_impl(prompt, **kwargs)
+        
+        # Clean the response BEFORE returning
+        cleaned_response = clean_response(raw_response)
+        
+        logger.debug(f"Response cleaned: {len(raw_response)} -> {len(cleaned_response)} chars")
+        
+        return cleaned_response
 
 # ============================================================================
 # LLM Configuration

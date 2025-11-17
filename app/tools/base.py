@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import time
 import json
-
+from app.config import KNOWLEDGE_DIR, DATA_DIR, BASE_DIR
 from app.core.interfaces import Tool
 from app.logger import setup_logger
 
@@ -522,7 +522,13 @@ def create_tool_registry_for_military() -> SimpleToolRegistry:
     ]
     
     # Add restricted file tools
-    read_tool = ReadFileTool(allowed_dirs=military_dirs, max_file_size_mb=50)
+    read_tool = ReadFileTool(
+        allowed_dirs=[
+            KNOWLEDGE_DIR,  # Explicitly add
+            DATA_DIR,
+            BASE_DIR,
+        ]
+    )
     write_tool = WriteFileTool(allowed_dirs=[Path("/data/outputs")])
     
     registry.register(read_tool)

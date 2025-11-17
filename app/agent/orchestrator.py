@@ -15,6 +15,7 @@ from app.core.interfaces import (
     Pipeline, PipelineStep, event_bus
 )
 from app.logger import setup_logger
+from app.llm.response_cleaner import clean_response
 
 logger = setup_logger(__name__)
 
@@ -195,12 +196,18 @@ class LLMGenerationStep(PipelineStep):
         prompt = context.metadata.get("prompt", context.query)
         
         try:
-            response = self.llm.generate(prompt)
-            context.metadata["llm_response"] = response
-            logger.info(f"Generated response: {len(response)} characters")
+            # Generate raw response
+            raw_response = self.llm.generate(prompt)
+            
+            # Clean the response
+            cleaned_response = clean_response(raw_response)
+            
+            context.metadata["llm_response"] = cleaned_response
+            logger.info(f"Generated and cleaned response: {len(cleaned_response)} chars")
+            
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
-            context.metadata["llm_response"] = "I apologize, but I encountered an error generating a response."
+            context.metadata["llm_response"] = "I apologize, but I encountered an error."
         
         return context
 

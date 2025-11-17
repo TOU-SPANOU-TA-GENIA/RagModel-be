@@ -214,23 +214,24 @@ class AgentBuilder:
         return registry
     
     def build_prompt_builder(self) -> 'AgentBuilder':
-        """Build robust prompt builder."""
-        logger.info("Building robust prompt builder")
+        """Build intelligent prompt builder."""
+        logger.info("Building intelligent prompt builder")
         
         tools_dict = None
         if self.tool_registry and self.config.enable_tools:
             tools_dict = self.tool_registry.tools
         
-        # Use robust prompt builder
+        # Use new intelligent prompt builder
         try:
-            from app.llm.robust_prompt_builder import RobustPromptBuilder
-            self.prompt_builder = RobustPromptBuilder(
+            from app.llm.intelligent_prompt_builder import IntelligentPromptBuilder
+            self.prompt_builder = IntelligentPromptBuilder(
                 system_instruction=self.config.system_instruction,
                 tools=tools_dict
             )
+            logger.info("Using IntelligentPromptBuilder with context filtering")
         except ImportError as e:
-            logger.warning(f"RobustPromptBuilder not available: {e}")
-            # Fallback
+            logger.warning(f"IntelligentPromptBuilder not available: {e}, using fallback")
+            # Fallback to existing builder
             from app.llm.providers import create_prompt_builder
             self.prompt_builder = create_prompt_builder(
                 system_instruction=self.config.system_instruction,
