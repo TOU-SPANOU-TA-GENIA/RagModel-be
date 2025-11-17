@@ -61,6 +61,7 @@ class AgentResponse(BaseModel):
     intent: str = Field(default="unknown", description="Detected intent")
     debug_info: List[str] = Field(default_factory=list, description="Debug information")
     execution_time: float = Field(default=0.0, description="Processing time in seconds")
+    session_id: Optional[str] = Field(None, description="Session ID for conversation continuity")  # ADD THIS LINE
 
 
 class UploadResponse(BaseModel):

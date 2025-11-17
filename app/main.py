@@ -314,31 +314,57 @@ async def post_message_to_chat(chat_id: str, msg: MessageRequest):
 # app/main.py (FIX the simple_chat endpoint)
 @app.post("/chat", response_model=AgentResponse)
 async def simple_chat(msg: MessageRequest, session_id: Optional[str] = None):
-    """Stateless chat endpoint with session support."""
+    """Chat endpoint with conversation memory support."""
     try:
+        from app.core.conversation_memory import conversation_memory
+        import uuid
+        
         agent = get_agent()
         
-        # Use provided session ID or create stateless session
-        context_metadata = {}
-        if session_id:
-            context_metadata["session_id"] = session_id
+        # Get or create session
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            logger.info(f"Created new session: {session_id}")
         
-        response = agent.process_query(msg.content, [])
+        session = conversation_memory.get_or_create_session(session_id)
         
-        # Convert to dictionary and add session ID
-        response_dict = {
-            "answer": response.answer,
-            "sources": response.sources,
-            "tool_used": response.tool_used,
-            "tool_result": response.tool_result,
-            "intent": response.intent,
-            "debug_info": response.debug_info,
-            "execution_time": response.execution_time
-        }
-        if session_id:
-            response_dict["session_id"] = session_id
+        # Add user message to session
+        session.add_message("user", msg.content)
         
-        return response_dict
+        # Get conversation history (exclude just-added message)
+        history = session.get_recent_messages(max_messages=10)[:-1]
+        
+        # Process with agent, passing history AND session_id
+        response = agent.process_query(
+            query=msg.content,
+            chat_history=history,
+            metadata={"session_id": session_id}  # PASS SESSION_ID HERE
+        )
+        
+        # Assistant response is auto-stored by orchestrator._store_assistant_response
+        
+        logger.info(f"Processed query - Session: {session_id[:8]}... Intent: {response.intent}")
+        
+        # Convert sources
+        source_docs = [
+            SourceDocument(
+                content=src.get("content", ""),
+                source=src.get("metadata", {}).get("source", "Unknown"),
+                relevance_score=src.get("score", 0.0)
+            )
+            for src in response.sources
+        ]
+        
+        return AgentResponse(
+            answer=response.answer,
+            sources=source_docs,
+            tool_used=response.tool_used,
+            tool_result=response.tool_result,
+            intent=response.intent,
+            debug_info=response.debug_info if AGENT_DEBUG_MODE else [],
+            execution_time=response.execution_time,
+            session_id=session_id  # RETURN SESSION_ID TO CLIENT
+        )
         
     except Exception as e:
         logger.error(f"Error in simple chat: {e}", exc_info=True)
@@ -346,10 +372,6 @@ async def simple_chat(msg: MessageRequest, session_id: Optional[str] = None):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process query"
         )
-
-# ============================================================================
-# Document Management Endpoints
-# ============================================================================
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_file(file: UploadFile = File(...)):

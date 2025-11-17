@@ -273,19 +273,26 @@ class SimpleAgentOrchestrator:
         self.tools[tool.name] = tool
         logger.info(f"Added tool: {tool.name}")
     
-    def process_query(self, query: str, chat_history: Optional[List[Dict[str, str]]] = None) -> AgentResponse:
-        """Process query with conversation memory."""
+    def process_query(
+        self, 
+        query: str, 
+        chat_history: List[Dict[str, str]] = None,
+        metadata: Dict[str, Any] = None  # ADD THIS PARAMETER
+    ) -> AgentResponse:
+        """Process query with conversation memory support."""
         start_time = time.time()
         
-        # Create context
+        # Create context WITH provided metadata (includes session_id)
         context = Context(
             query=query,
             chat_history=chat_history or [],
-            metadata={},
+            metadata=metadata or {},  # CHANGED: Use provided metadata
             debug_info=[]
         )
         
         logger.info(f"Processing query: {query[:100]}...")
+        if metadata and "session_id" in metadata:
+            logger.debug(f"Session: {metadata['session_id'][:8]}...")
         
         # Process through pipeline
         try:
