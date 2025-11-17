@@ -1,20 +1,24 @@
+# app/rag/ingestion.py
+"""
+Simplified document ingestion module.
+Moved from app/ingestion.py and refactored for new architecture.
+"""
+
 import os
 from pathlib import Path
 from typing import List, Optional
 from fastapi import UploadFile
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
-
-from .config import KNOWLEDGE_DIR, RAG_CONFIG
-from .vectorstore import add_documents, reset_vectorstore
-from .exceptions import IngestionException
-from .logger import setup_logger
+from ..config import KNOWLEDGE_DIR, RAG_CONFIG
+from ..exceptions import IngestionException
+from ..logger import setup_logger
+from .retrievers import DocumentProcessor, LocalEmbeddingProvider, Document
 
 logger = setup_logger(__name__)
 
 
 async def save_upload(file: UploadFile) -> str:
+    """Save an uploaded file to the knowledge directory."""
     try:
         KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
         
@@ -35,7 +39,8 @@ async def save_upload(file: UploadFile) -> str:
 
 
 def load_text_file(filepath: Path) -> str:
-    encodings = ['utf-8', 'utf-8-sig', 'cp1252']
+    """Load text from a file with multiple encoding attempts."""
+    encodings = ['utf-8', 'utf-8-sig', 'cp1252', 'latin-1']
     
     for encoding in encodings:
         try:
@@ -50,8 +55,8 @@ def load_text_file(filepath: Path) -> str:
 
 
 def load_documents_from_directory(directory: Path) -> List[Document]:
+    """Load all documents from a directory."""
     documents = []
-    
     supported_extensions = {'.txt', '.md', '.text'}
     
     if not directory.exists():
@@ -64,7 +69,7 @@ def load_documents_from_directory(directory: Path) -> List[Document]:
                 content = load_text_file(filepath)
                 
                 doc = Document(
-                    page_content=content,
+                    content=content,
                     metadata={
                         "source": filepath.name,
                         "filepath": str(filepath),
@@ -81,38 +86,15 @@ def load_documents_from_directory(directory: Path) -> List[Document]:
     return documents
 
 
-def chunk_documents(documents: List[Document]) -> List[Document]:
-    if not documents:
-        return []
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=RAG_CONFIG["chunk_size"],
-        chunk_overlap=RAG_CONFIG["chunk_overlap"],
-        length_function=len,
-        separators=["\n\n", "\n", ". ", " ", ""]
-    )
-    
-    chunked_docs = text_splitter.split_documents(documents)
-    
-    for i, doc in enumerate(chunked_docs):
-        doc.metadata["chunk_id"] = i
-    
-    logger.info(f"Split {len(documents)} documents into {len(chunked_docs)} chunks")
-    return chunked_docs
-
-
 def ingest_directory(directory: Path = KNOWLEDGE_DIR, rebuild: bool = False) -> dict:
+    """Ingest all documents from a directory into in-memory vector store."""
     try:
         logger.info(f"Starting ingestion from {directory} (rebuild={rebuild})")
         
-        # Reset vector store if rebuilding
-        if rebuild:
-            logger.info("Rebuilding vector store from scratch")
-            reset_vectorstore()
+        # Load documents
+        raw_documents = load_documents_from_directory(directory)
         
-        documents = load_documents_from_directory(directory)
-        
-        if not documents:
+        if not raw_documents:
             logger.warning("No documents found to ingest")
             return {
                 "success": False,
@@ -121,20 +103,50 @@ def ingest_directory(directory: Path = KNOWLEDGE_DIR, rebuild: bool = False) -> 
                 "chunks_created": 0
             }
         
-        chunked_docs = chunk_documents(documents)
+        # Use in-memory components
+        from app.core.memory_store import FastInMemoryVectorStore, CachedEmbeddingProvider
         
-        success = add_documents(chunked_docs)
+        # Process documents
+        base_embedding_provider = LocalEmbeddingProvider()
+        embedding_provider = CachedEmbeddingProvider(base_embedding_provider)
         
-        if success:
-            logger.info("Ingestion completed successfully")
-            return {
-                "success": True,
-                "message": "Ingestion completed successfully",
-                "documents_loaded": len(documents),
-                "chunks_created": len(chunked_docs)
+        processor = DocumentProcessor(
+            embedding_provider=embedding_provider,
+            chunk_size=RAG_CONFIG["chunk_size"],
+            chunk_overlap=RAG_CONFIG["chunk_overlap"]
+        )
+        
+        # Process each document into chunks with embeddings
+        all_chunks = []
+        for doc in raw_documents:
+            chunks = processor.process_text(doc.content, doc.metadata)
+            all_chunks.extend(chunks)
+        
+        # Use in-memory vector store
+        vector_store = FastInMemoryVectorStore(dimension=384)
+        
+        if rebuild:
+            vector_store.clear()
+        
+        # Convert Document objects to dicts for in-memory store
+        chunk_dicts = [
+            {
+                "content": chunk.content,
+                "metadata": chunk.metadata,
+                "embedding": chunk.embedding
             }
-        else:
-            raise IngestionException("Failed to add documents to vector store")
+            for chunk in all_chunks
+        ]
+        
+        vector_store.add_documents(chunk_dicts)
+        
+        logger.info("Ingestion completed successfully (all in memory)")
+        return {
+            "success": True,
+            "message": "Ingestion completed successfully",
+            "documents_loaded": len(raw_documents),
+            "chunks_created": len(all_chunks)
+        }
     
     except Exception as e:
         logger.error(f"Ingestion failed: {e}")
@@ -147,16 +159,17 @@ def ingest_directory(directory: Path = KNOWLEDGE_DIR, rebuild: bool = False) -> 
 
 
 async def ingest_single_file(filepath: str) -> dict:
+    """Ingest a single file into the vector store."""
     try:
         path = Path(filepath)
         
         if not path.exists():
             raise IngestionException(f"File not found: {filepath}")
         
-        # Load single document
+        # Load document
         content = load_text_file(path)
         doc = Document(
-            page_content=content,
+            content=content,
             metadata={
                 "source": path.name,
                 "filepath": str(path),
@@ -164,18 +177,30 @@ async def ingest_single_file(filepath: str) -> dict:
             }
         )
         
-        chunked_docs = chunk_documents([doc])
+        # Process into chunks
+        embedding_provider = LocalEmbeddingProvider()
+        processor = DocumentProcessor(
+            embedding_provider=embedding_provider,
+            chunk_size=RAG_CONFIG["chunk_size"],
+            chunk_overlap=RAG_CONFIG["chunk_overlap"]
+        )
         
-        success = add_documents(chunked_docs)
+        chunks = processor.process_text(doc.content, doc.metadata)
         
-        if success:
-            return {
-                "success": True,
-                "message": f"File {path.name} ingested successfully",
-                "chunks_created": len(chunked_docs)
-            }
-        else:
-            raise IngestionException("Failed to add document to vector store")
+        # Add to vector store
+        from .retrievers import FAISSVectorStore
+        from ..config import INDEX_DIR
+        
+        vector_store = FAISSVectorStore(
+            index_path=str(INDEX_DIR / "index.faiss")
+        )
+        vector_store.add_documents(chunks)
+        
+        return {
+            "success": True,
+            "message": f"File {path.name} ingested successfully",
+            "chunks_created": len(chunks)
+        }
     
     except Exception as e:
         logger.error(f"Failed to ingest file {filepath}: {e}")

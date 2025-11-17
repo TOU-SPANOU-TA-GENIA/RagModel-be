@@ -1,7 +1,4 @@
 import os
-
-# LLM_MODEL_NAME = "ilsp/Llama-Krikri-3B-Instruct"
-
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.parent
@@ -11,36 +8,30 @@ INSTRUCTIONS_DIR = DATA_DIR / "instructions"
 INDEX_DIR = BASE_DIR / "faiss_index"
 OFFLOAD_DIR = BASE_DIR / "offload"
 
-# NEW: Offline models directory
-OFFLINE_MODELS_DIR = BASE_DIR / "offline_models"  # Or your custom path
+# Offline models directory
+OFFLINE_MODELS_DIR = BASE_DIR / "offline_models"
 
 KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
 INSTRUCTIONS_DIR.mkdir(parents=True, exist_ok=True)
 OFFLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# MODEL CONFIGURATION - OFFLINE MODE
+# MODEL CONFIGURATION
 # ============================================================================
 
 # Use local model paths instead of HuggingFace names
 LLM_MODEL_NAME = str(OFFLINE_MODELS_DIR / "llm" / "meta-llama--Llama-3.2-3B-Instruct")
-
 EMBEDDING_MODEL_NAME = str(OFFLINE_MODELS_DIR / "embeddings" / "sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2")
 
-# Verify models exist
+# Verify models exist (optional check - comment out if not needed)
 if not Path(LLM_MODEL_NAME).exists():
-    raise FileNotFoundError(
-        f"LLM model not found at: {LLM_MODEL_NAME}\n"
-        f"Please download models first using download_models.py"
-    )
+    # Use fallback to HF model name if local not found
+    LLM_MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"
 
 if not Path(EMBEDDING_MODEL_NAME).exists():
-    raise FileNotFoundError(
-        f"Embedding model not found at: {EMBEDDING_MODEL_NAME}\n"
-        f"Please download models first using download_models.py"
-    )
+    # Use fallback to HF model name if local not found
+    EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
-# Rest of your config...
 LLM_CONFIG = {
     "max_new_tokens": 512,
     "temperature": 0.7,
@@ -53,10 +44,52 @@ RAG_CONFIG = {
     "top_k": 3,
     "chunk_size": 500,
     "chunk_overlap": 50,
-    "min_relevance_score": 0.2,  # Lowered for better recall
+    "min_relevance_score": 0.2,
 }
 
-# for front requests to back
+# ============================================================================
+# NEW AGENT CONFIGURATION
+# ============================================================================
+
+AGENT_MODE = os.getenv("AGENT_MODE", "production")  # production, development, military
+AGENT_USE_CACHE = os.getenv("AGENT_USE_CACHE", "false").lower() == "true"
+AGENT_DEBUG_MODE = os.getenv("AGENT_DEBUG", "false").lower() == "true"
+
+# IMPORTANT: Use in-memory storage for performance
+USE_IN_MEMORY_STORAGE = True  # Set to False only if you need persistence
+CACHE_MODELS_IN_MEMORY = True  # Keep models loaded in memory
+CACHE_EMBEDDINGS = True  # Cache computed embeddings
+
+# Agent tool configuration
+AGENT_ALLOWED_DIRECTORIES = [
+    DATA_DIR,
+    KNOWLEDGE_DIR,
+    INSTRUCTIONS_DIR,
+    BASE_DIR / "logs",
+    BASE_DIR / "config",
+]
+
+AGENT_MAX_FILE_SIZE_MB = 10
+
+AGENT_ALLOWED_EXTENSIONS = {
+    '.txt', '.md', '.text',
+    '.json', '.yaml', '.yml',
+    '.conf', '.config', '.cfg',
+    '.log',
+    '.py', '.sh', '.bash',
+    '.xml', '.html', '.csv',
+}
+
+AGENT_ALLOWED_COMMANDS = ["ls", "pwd", "echo", "date", "whoami", "df", "free"]
+
+AGENT_SHOW_FILE_CONTENT = True
+AGENT_FILE_CONTENT_FORMAT = "pretty"  # Options: "pretty", "raw", "minimal"
+AGENT_MAX_CONTENT_DISPLAY_LINES = None
+
+# ============================================================================
+# API CONFIGURATION
+# ============================================================================
+
 CORS_ORIGINS = [
     "http://localhost:4200",
     "http://127.0.0.1:4200",
@@ -64,6 +97,10 @@ CORS_ORIGINS = [
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# ============================================================================
+# SYSTEM INSTRUCTIONS
+# ============================================================================
 
 def load_system_instructions():
     persona_file = INSTRUCTIONS_DIR / "persona.txt"
@@ -78,7 +115,6 @@ def load_system_instructions():
     if rules_file.exists():
         rules = rules_file.read_text(encoding="utf-8")
     
-    # Add knowledge base instruction
     knowledge_instruction = """
 
 ## IMPORTANT: YOUR KNOWLEDGE BASE
@@ -110,37 +146,3 @@ When context is provided in <context> tags, use it to answer questions.
 """
 
 SYSTEM_INSTRUCTION = load_system_instructions()
-
-# ============================================================================
-# AGENT CONFIGURATION
-# ============================================================================
-
-# Directories where the agent can read files
-# Add your military network paths here
-AGENT_ALLOWED_DIRECTORIES = [
-    DATA_DIR,  # Already defined: BASE_DIR / "data"
-    KNOWLEDGE_DIR,  # Already defined: DATA_DIR / "knowledge"
-    INSTRUCTIONS_DIR,  # Already defined: DATA_DIR / "instructions"
-    BASE_DIR / "logs",  # If you have logs directory
-    BASE_DIR / "config",  # If you have config directory
-    # Add more directories as needed for your military network:
-    # Path("/opt/military_app/data"),
-    # Path("/var/log/military_app"),
-]
-
-# Maximum file size the agent can read (in MB)
-AGENT_MAX_FILE_SIZE_MB = 10
-
-# Allowed file extensions for reading
-AGENT_ALLOWED_EXTENSIONS = {
-    '.txt', '.md', '.text',  # Text files
-    '.json', '.yaml', '.yml',  # Data files
-    '.conf', '.config', '.cfg',  # Config files
-    '.log',  # Log files
-    '.py', '.sh', '.bash',  # Scripts (read-only)
-    '.xml', '.html', '.csv',  # Markup and data
-}
-
-AGENT_SHOW_FILE_CONTENT = True  # Include file content in response
-AGENT_FILE_CONTENT_FORMAT = "pretty"  # Options: "pretty", "raw", "minimal"
-AGENT_MAX_CONTENT_DISPLAY_LINES = None  # None = show all, or set a number like 100

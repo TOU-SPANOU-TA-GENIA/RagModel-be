@@ -8,7 +8,6 @@ class NewChatRequest(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    
     role: str = Field(default="user", pattern="^(user|assistant|system)$")
     content: str = Field(..., min_length=1, max_length=10000)
     
@@ -52,6 +51,18 @@ class ChatResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+# NEW: Clean agent response model
+class AgentResponse(BaseModel):
+    """Response from the new agent architecture."""
+    answer: str
+    sources: List[SourceDocument] = Field(default_factory=list)
+    tool_used: Optional[str] = Field(None, description="Name of tool used")
+    tool_result: Optional[Dict[str, Any]] = Field(None, description="Tool execution result")
+    intent: str = Field(default="unknown", description="Detected intent")
+    debug_info: List[str] = Field(default_factory=list, description="Debug information")
+    execution_time: float = Field(default=0.0, description="Processing time in seconds")
+
+
 class UploadResponse(BaseModel):
     filename: str
     status: str
@@ -82,18 +93,3 @@ class StatsResponse(BaseModel):
     total_messages: int
     avg_messages_per_chat: float
     vector_store_initialized: bool
-    
-class AgentChatResponse(BaseModel):
-    """
-    Response from agent-powered chat endpoint.
-    
-    Extends ChatResponse with agent-specific information.
-    """
-    answer: str
-    sources: List[SourceDocument]
-    tool_used: Optional[str] = Field(None, description="Name of tool used, if any")
-    tool_result: Optional[Dict[str, Any]] = Field(None, description="Result from tool execution")
-    metadata: Optional[Dict[str, Any]] = Field(
-        None, 
-        description="Additional metadata including intent, decision info"
-    )

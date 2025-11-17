@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from app.config import KNOWLEDGE_DIR, INDEX_DIR, INSTRUCTIONS_DIR
-from app.ingestion import ingest_directory
+from app.rag.ingestion import ingest_directory
 from app.logger import setup_logger
 
 logger = setup_logger(__name__)
