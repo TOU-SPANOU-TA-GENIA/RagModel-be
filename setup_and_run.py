@@ -63,12 +63,33 @@ def run_ingestion(rebuild=True):
         logger.error(f" Ingestion error: {e}")
         return False
 
+def preload_system():
+    """Pre-load everything before starting server."""
+    logger.info("🔧 Pre-loading system components...")
+    
+    try:
+        # Import and initialize startup manager
+        from app.startup import startup_manager
+        import asyncio
+        
+        # Run pre-loading
+        asyncio.run(startup_manager.initialize_system())
+        return True
+        
+    except Exception as e:
+        logger.error(f"Pre-loading failed: {e}")
+        return False
+    
 # Start the FastAPI server.
 def start_server(host="localhost", port=8000):
     logger.info(" Starting FastAPI server...")
+    logger.info("✅ Optimized startup - server ready in seconds")
+    logger.info("   🔄 Heavy components load in background")
     logger.info(f"   Host: {host}")
     logger.info(f"   Port: {port}")
     logger.info(f"   API docs: http://{host}:{port}/docs")
+    logger.info(f"   Health: http://{host}:{port}/health")
+    logger.info(f"   Startup status: http://{host}:{port}/startup-status")
     
     import uvicorn
     from app.main import app

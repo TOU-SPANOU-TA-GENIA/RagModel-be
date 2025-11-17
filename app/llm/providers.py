@@ -420,46 +420,40 @@ class ToolAwarePromptBuilder(SimplePromptBuilder):
 # Factory Functions
 # ============================================================================
 
+# app/llm/providers.py (UPDATE factory function)
 def create_llm_provider(
     model_name: str = None,
     provider_type: str = "local",
     **kwargs
 ) -> LLMProvider:
-    """
-    Factory function to create LLM providers.
+    """Factory function to create LLM providers."""
     
-    Args:
-        model_name: Model name or path
-        provider_type: "local", "mock", "openai", etc.
-        **kwargs: Additional config parameters
-    """
     # Create config
+    from app.config import LLMConfig
     config = LLMConfig(
-        model_name=model_name or "meta-llama/Llama-3.2-3B-Instruct",
-        max_tokens=kwargs.get("max_tokens", 512),
+        model_name=model_name or LLM_MODEL_NAME,
+        max_tokens=kwargs.get("max_tokens", 256),  # Shorter default
         temperature=kwargs.get("temperature", 0.7),
         top_p=kwargs.get("top_p", 0.9),
         device=kwargs.get("device", "auto"),
-        quantization=kwargs.get("quantization", None)
+        quantization=kwargs.get("quantization", "4bit")  # Force 4-bit for speed
     )
     
     # Create provider based on type
     if provider_type == "mock":
+        from .providers import MockLLMProvider
         provider = MockLLMProvider(config)
     elif provider_type == "local":
-        provider = LocalModelProvider(config)
-    # Add more providers here (OpenAI, Anthropic, etc.)
+        from .fast_providers import FastLocalModelProvider
+        provider = FastLocalModelProvider(config)
+    elif provider_type == "prewarmed":
+        from .prewarmed_provider import prewarmed_llm
+        return prewarmed_llm  # Return the singleton
     else:
         raise ValueError(f"Unknown provider type: {provider_type}")
     
-    # Optionally wrap with caching
-    if kwargs.get("use_cache", False):
-        provider = CachedLLMProvider(provider)
-    
     logger.info(f"Created {provider_type} LLM provider for {model_name}")
-    
     return provider
-
 
 def create_prompt_builder(
     system_instruction: str = None,

@@ -5,8 +5,8 @@ This replaces the monolithic Agent class with a modular, debuggable design.
 """
 
 import time
+from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
 
 from app.core.interfaces import (
     Context, Intent, Decision, 
@@ -33,6 +33,10 @@ class AgentResponse:
     intent: str = "unknown"
     debug_info: List[str] = field(default_factory=list)
     execution_time: float = 0.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API response."""
+        return asdict(self)
 
 
 # ============================================================================
@@ -269,13 +273,8 @@ class SimpleAgentOrchestrator:
         self.tools[tool.name] = tool
         logger.info(f"Added tool: {tool.name}")
     
-    def process_query(self,
-                     query: str,
-                     chat_history: Optional[List[Dict[str, str]]] = None) -> AgentResponse:
-        """
-        Process a query through the pipeline.
-        Much simpler than the original 150+ line method!
-        """
+    def process_query(self, query: str, chat_history: Optional[List[Dict[str, str]]] = None) -> AgentResponse:
+        """Process query with conversation memory."""
         start_time = time.time()
         
         # Create context
@@ -303,9 +302,26 @@ class SimpleAgentOrchestrator:
         response = self._build_response(context)
         response.execution_time = time.time() - start_time
         
+        # Store assistant response in conversation memory
+        self._store_assistant_response(context, response.answer)
+        
         logger.info(f"Query processed in {response.execution_time:.2f}s")
         
         return response
+    
+    def _store_assistant_response(self, context: Context, answer: str):
+        """Store assistant response in conversation memory."""
+        try:
+            from app.core.conversation_memory import conversation_memory
+            
+            session_id = context.metadata.get("session_id")
+            if session_id:
+                session = conversation_memory.get_session(session_id)
+                if session:
+                    session.add_message("assistant", answer)
+                    logger.debug(f"Stored assistant response in session: {session_id}")
+        except Exception as e:
+            logger.debug(f"Could not store assistant response: {e}")
     
     def _build_response(self, context: Context) -> AgentResponse:
         """Build the final response from context."""

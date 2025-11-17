@@ -126,15 +126,16 @@ class AgentBuilder:
         self.tool_registry = None
         
     def build_llm_provider(self) -> 'AgentBuilder':
-        """Build LLM provider based on config."""
+        """Build optimized LLM provider."""
         if self.config.use_mock_llm:
             logger.info("Using mock LLM provider")
-            self.llm_provider = MockLLMProvider()
+            self.llm_provider = create_llm_provider(provider_type="mock")
         else:
-            logger.info(f"Creating LLM provider for {self.config.llm_model_name}")
+            logger.info(f"Creating FAST LLM provider for {self.config.llm_model_name}")
+            # Use pre-warmed provider for maximum speed
             self.llm_provider = create_llm_provider(
                 model_name=self.config.llm_model_name,
-                provider_type="local",
+                provider_type="prewarmed",  # Use pre-warmed provider
                 use_cache=self.config.use_cache
             )
         return self
@@ -213,17 +214,28 @@ class AgentBuilder:
         return registry
     
     def build_prompt_builder(self) -> 'AgentBuilder':
-        """Build prompt builder."""
-        logger.info("Building prompt builder")
+        """Build context-aware prompt builder."""
+        logger.info("Building context-aware prompt builder")
         
         tools_dict = None
         if self.tool_registry and self.config.enable_tools:
             tools_dict = self.tool_registry.tools
         
-        self.prompt_builder = create_prompt_builder(
-            system_instruction=self.config.system_instruction,
-            tools=tools_dict
-        )
+        # Use context-aware prompt builder
+        try:
+            from app.llm.context_aware_prompt_builder import ContextAwarePromptBuilder
+            self.prompt_builder = ContextAwarePromptBuilder(
+                system_instruction=self.config.system_instruction,
+                tools=tools_dict
+            )
+        except ImportError as e:
+            logger.warning(f"ContextAwarePromptBuilder not available, using fallback: {e}")
+            # Fallback to simple prompt builder
+            from app.llm.providers import create_prompt_builder
+            self.prompt_builder = create_prompt_builder(
+                system_instruction=self.config.system_instruction,
+                tools=tools_dict
+            )
         
         return self
     

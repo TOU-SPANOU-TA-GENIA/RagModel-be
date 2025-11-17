@@ -19,6 +19,12 @@ import sys
 import json
 from typing import Optional
 
+try:
+    from app.config import AGENT_DEBUG_MODE
+except ImportError:
+    # Fallback if not available
+    AGENT_DEBUG_MODE = False
+    
 BASE_URL = "http://localhost:8000"
 
 class Colors:
@@ -31,6 +37,46 @@ class Colors:
     END = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
+class ChatSession:
+    """Manages chat session with conversation memory."""
+    
+    def __init__(self):
+        self.session_id = None
+        self.base_url = BASE_URL
+    
+    def send_message(self, message: str) -> dict:
+        """Send message with session context."""
+        try:
+            url = f"{self.base_url}/chat"
+            params = {}
+            
+            if self.session_id:
+                params["session_id"] = self.session_id
+            
+            response = requests.post(
+                url,
+                json={"role": "user", "content": message},
+                params=params
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                # Update session ID if provided
+                if "session_id" in result:
+                    self.session_id = result["session_id"]
+                return result
+            else:
+                print_error(f"Server error: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print_error(f"Failed to send message: {e}")
+            return None
+    
+    def get_session_id(self) -> str:
+        """Get current session ID."""
+        return self.session_id or "no-session"
 
 def print_header(text: str):
     print(f"\n{Colors.BOLD}{Colors.BLUE}{text}{Colors.END}")
@@ -59,12 +105,27 @@ def print_sources(sources: list):
         print(f"  {i}. {source_name} (relevance: {score:.2f})")
 
 def check_server() -> bool:
+    """Check server with startup awareness."""
     try:
-        response = requests.get(f"{BASE_URL}/health", timeout=5)
-        return response.status_code == 200
+        # First, check if server is responding at all
+        response = requests.get(f"{BASE_URL}/startup-status", timeout=5)
+        
+        if response.status_code == 200:
+            status_data = response.json()
+            
+            if status_data.get("status") == "ready":
+                return True
+            else:
+                print_warning("Server is starting up...")
+                print(f"Status: {status_data.get('message')}")
+                return True  # Still accept connections during startup
+        
+        return False
+        
     except requests.exceptions.ConnectionError:
         return False
-    except Exception:
+    except Exception as e:
+        print_warning(f"Server check: {e}")
         return False
 
 def create_chat(title: str = "CLI Chat") -> Optional[str]:
@@ -142,33 +203,46 @@ def list_chats():
     except Exception as e:
         print_error(f"Failed to list chats: {e}")
 
+# test/chat_cli.py - Complete fixed interactive_mode function
+
 def interactive_mode(chat_id: Optional[str] = None):
-    print_header(" RAG Chat - Interactive Mode")
-    print("Type 'exit' or 'quit' to end the session")
-    print("Type 'new' to start a new chat")
-    print("Type 'list' to see all chats")
-    print("Type 'clear' to clear screen")
-    print("-" * 50)
+    print_header("🤖 RAG Chat - Interactive Mode (Context-Aware)")
+    print("💬 Type 'exit' or 'quit' to end the session")
+    print("🆕 Type 'new' to start a new chat")
+    print("📋 Type 'list' to see all chats")
+    print("🧹 Type 'clear' to clear screen")
+    print("ℹ️  Type 'session' to show session info")
+    print("🆔 Type 'reset' to reset session and start fresh")
+    print("❓ Type 'help' to show this help")
+    print("-" * 60)
     
-    current_chat_id = chat_id
+    # Initialize chat session
+    chat_session = ChatSession()
+    
+    # If chat_id provided, use it as session
+    if chat_id:
+        chat_session.session_id = chat_id
+        print_success(f"Using existing chat session: {chat_session.get_session_id()}")
     
     while True:
         try:
-            if current_chat_id:
-                prompt = f"{Colors.GREEN}You [{current_chat_id[:8]}]:{Colors.END} "
-            else:
-                prompt = f"{Colors.GREEN}You [stateless]:{Colors.END} "
+            # Create dynamic prompt with session info
+            session_display = chat_session.get_session_id()
+            prompt = f"{Colors.GREEN}You [{session_display}]:{Colors.END} "
             
             user_input = input(prompt).strip()
             
             # Handle commands
             if user_input.lower() in ['exit', 'quit', 'q']:
-                print_success("Goodbye!")
+                print_success("👋 Goodbye!")
                 break
             
             elif user_input.lower() == 'new':
                 title = input("Enter chat title (or press Enter for default): ").strip()
-                current_chat_id = create_chat(title or "CLI Chat")
+                new_chat_id = create_chat(title or "CLI Chat")
+                if new_chat_id:
+                    chat_session.session_id = new_chat_id
+                    print_success(f"🆕 New chat created: {chat_session.get_session_id()}")
                 continue
             
             elif user_input.lower() == 'list':
@@ -178,37 +252,97 @@ def interactive_mode(chat_id: Optional[str] = None):
             elif user_input.lower() == 'clear':
                 import os
                 os.system('cls' if os.name == 'nt' else 'clear')
+                # Re-print header after clear
+                print_header("🤖 RAG Chat - Interactive Mode (Context-Aware)")
+                print("Session continues...")
+                print("-" * 60)
+                continue
+            
+            elif user_input.lower() == 'session':
+                print(f"🔑 Session ID: {chat_session.session_id or 'No active session'}")
+                print(f"📝 Display: {chat_session.get_session_id()}")
+                if chat_session.session_id:
+                    print_success("✅ Session is active - conversation context is being maintained")
+                else:
+                    print_warning("⚠️  No session - each message is treated independently")
+                continue
+            
+            elif user_input.lower() == 'reset':
+                chat_session.session_id = None
+                print_success("🔄 Session reset - starting fresh conversation")
                 continue
             
             elif user_input.lower() == 'help':
-                print("\nCommands:")
-                print("  exit/quit - Exit the program")
-                print("  new - Create new chat")
-                print("  list - List all chats")
-                print("  clear - Clear screen")
-                print("  help - Show this help")
+                print("\n📚 Available Commands:")
+                print("  exit/quit/q   - Exit the program")
+                print("  new           - Create new chat session")
+                print("  list          - List all available chats")
+                print("  clear         - Clear the screen")
+                print("  session       - Show current session information")
+                print("  reset         - Reset session and start fresh")
+                print("  help          - Show this help message")
+                print("\n💡 Tips:")
+                print("  - The AI will remember your conversation across messages")
+                print("  - Use 'when I say X, you answer Y' to give specific instructions")
+                print("  - Session ID ensures context is maintained")
                 continue
             
             elif not user_input:
                 continue
             
-            # Send message
-            print(f"{Colors.YELLOW} Thinking...{Colors.END}")
+            # Send message to AI
+            print(f"{Colors.YELLOW}🤔 Thinking...{Colors.END}")
             
-            result = send_message(user_input, current_chat_id)
+            result = chat_session.send_message(user_input)
             
-            print('result:', result)
             if result:
                 print_answer(result.get('answer', 'No answer received'))
-                print_sources(result.get('sources', []))
+                
+                # Show sources if available
+                sources = result.get('sources', [])
+                if sources:
+                    print_sources(sources)
+                
+                # Show intent and execution time
+                intent = result.get('intent', 'unknown')
+                exec_time = result.get('execution_time', 0)
+                tool_used = result.get('tool_used')
+                
+                print(f"{Colors.CYAN}📊 Metadata:{Colors.END}")
+                print(f"  Intent: {intent}")
+                print(f"  Time: {exec_time:.2f}s")
+                if tool_used:
+                    print(f"  Tool: {tool_used}")
+                
+                # Show session info if changed
+                if 'session_id' in result and result['session_id'] != chat_session.session_id:
+                    chat_session.session_id = result['session_id']
+                    print(f"{Colors.GREEN}🔗 New session: {chat_session.get_session_id()}{Colors.END}")
+                
+                # Show debug info if available and debug mode is enabled
+                debug_info = result.get('debug_info', [])
+                if debug_info and AGENT_DEBUG_MODE:
+                    print(f"{Colors.YELLOW}🐛 Debug Info:{Colors.END}")
+                    for debug_msg in debug_info:
+                        print(f"  - {debug_msg}")
             
+            else:
+                print_error("❌ Failed to get response from server")
+                print_warning("💡 Try again or check server status")
+        
         except KeyboardInterrupt:
             print("\n")
-            print_success("Goodbye!")
+            print_success("👋 Goodbye!")
             break
         
         except EOFError:
+            print("\n")
+            print_success("👋 Goodbye!")
             break
+        
+        except Exception as e:
+            print_error(f"Unexpected error: {e}")
+            print_warning("💡 The session will continue...")
 
 def one_shot_query(message: str, chat_id: Optional[str] = None, show_sources: bool = True):
     print_header("Sending query to server...")

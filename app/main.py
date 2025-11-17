@@ -6,6 +6,8 @@ FastAPI application with new modular agent architecture.
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from datetime import datetime
+from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
 
 from .models import (
@@ -36,20 +38,24 @@ logger = setup_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize application on startup."""
-    logger.info("Starting RAG application with new agent architecture...")
+    """Ultra-fast startup with pre-warmed LLM."""
+    logger.info("🚀 Starting RAG application with ULTRA-FAST startup...")
     
     try:
-        # Initialize agent
-        agent = create_agent(mode=AGENT_MODE)
-        logger.info(f"Agent initialized in {AGENT_MODE} mode")
+        # Ultra-fast initialization
+        from app.startup import startup_manager
+        await startup_manager.initialize_system_ultra_fast()
+        
+        logger.info("✅ Application READY - instant responses enabled")
+        logger.info("   🔥 LLM pre-warming in background...")
+        
     except Exception as e:
-        logger.error(f"Error initializing agent: {e}")
+        logger.error(f"❌ Application startup failed: {e}")
+        raise
     
     yield
     
-    logger.info("Shutting down RAG application...")
-
+    logger.info("🛑 Shutting down RAG application...")
 
 app = FastAPI(
     title="AI Agent RAG API v2",
@@ -84,6 +90,21 @@ async def rag_exception_handler(request, exc: RAGException):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"error": "System error", "detail": str(exc)}
     )
+
+@app.get("/startup-status")
+async def get_startup_status():
+    """Check startup and pre-loading status."""
+    from app.startup import startup_manager
+    
+    status = startup_manager.get_status()
+    
+    return {
+        "status": "ready" if startup_manager.is_ready() else "starting",
+        "timestamp": datetime.utcnow().isoformat(),
+        "startup_info": status,
+        "message": "Server is ready to handle requests" if startup_manager.is_ready() else "Server is starting up..."
+    }
+    
 
 # ============================================================================
 # System Endpoints
@@ -123,13 +144,10 @@ async def clear_memory_cache(keep_models: bool = True):
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint."""
-    from datetime import datetime
-    from .gpu_utils import get_gpu_info
+    """Health check with LLM pre-warm status."""
+    from app.startup import startup_manager
+    from app.llm.prewarmed_provider import prewarmed_llm
     
-    gpu_info = get_gpu_info()
-    
-    # Check agent status
     try:
         agent = get_agent()
         agent_ok = True
@@ -137,19 +155,27 @@ async def health_check():
         agent_ok = False
     
     services = {
-        "agent": agent_ok,
-        "knowledge_directory": KNOWLEDGE_DIR.exists(),
-        "gpu": gpu_info is not None,
+        "server_ready": startup_manager.is_ready(),
+        "llm_prewarmed": prewarmed_llm.is_ready(),
+        "agent_available": agent_ok,
+        "knowledge_base": KNOWLEDGE_DIR.exists(),
+        "startup_status": startup_manager.get_status(),
     }
     
-    if gpu_info:
-        services["gpu_info"] = gpu_info
+    # Determine status
+    if startup_manager.is_ready() and prewarmed_llm.is_ready():
+        overall_status = "healthy"
+    elif startup_manager.is_ready():
+        overall_status = "degraded"  # Server ready, LLM still warming
+    else:
+        overall_status = "starting"
     
     return {
-        "status": "healthy" if agent_ok else "degraded",
+        "status": overall_status,
         "timestamp": datetime.utcnow().isoformat(),
         "services": services
     }
+    
 
 @app.get("/stats", response_model=StatsResponse)
 async def get_system_stats():
@@ -229,7 +255,7 @@ async def delete_chat_endpoint(chat_id: str):
 
 @app.post("/chats/{chat_id}/message", response_model=AgentResponse)
 async def post_message_to_chat(chat_id: str, msg: MessageRequest):
-    """Send a message to a chat and get agent response."""
+    """Send message to chat with conversation memory."""
     try:
         # Validate chat exists
         _ = get_chat(chat_id)
@@ -240,8 +266,12 @@ async def post_message_to_chat(chat_id: str, msg: MessageRequest):
         # Get history (exclude just-added message)
         history = get_history(chat_id)[:-1]
         
-        # Process with agent
+        # Process with agent using chat ID as session ID
         agent = get_agent()
+        
+        # Create context with chat ID as session ID
+        context_metadata = {"session_id": chat_id}
+        
         response = agent.process_query(msg.content, history)
         
         # Store assistant response
@@ -249,7 +279,7 @@ async def post_message_to_chat(chat_id: str, msg: MessageRequest):
         
         logger.info(f"Processed message for chat {chat_id} - Intent: {response.intent}")
         
-        # Convert sources to SourceDocument format
+        # Convert sources
         source_docs = [
             SourceDocument(
                 content=src.get("content", ""),
@@ -281,32 +311,34 @@ async def post_message_to_chat(chat_id: str, msg: MessageRequest):
             detail="Failed to process message"
         )
 
+# app/main.py (FIX the simple_chat endpoint)
 @app.post("/chat", response_model=AgentResponse)
-async def simple_chat(msg: MessageRequest):
-    """Stateless chat endpoint."""
+async def simple_chat(msg: MessageRequest, session_id: Optional[str] = None):
+    """Stateless chat endpoint with session support."""
     try:
         agent = get_agent()
+        
+        # Use provided session ID or create stateless session
+        context_metadata = {}
+        if session_id:
+            context_metadata["session_id"] = session_id
+        
         response = agent.process_query(msg.content, [])
         
-        # Convert sources
-        source_docs = [
-            SourceDocument(
-                content=src.get("content", ""),
-                source=src.get("metadata", {}).get("source", "Unknown"),
-                relevance_score=src.get("score", 0.0)
-            )
-            for src in response.sources
-        ]
+        # Convert to dictionary and add session ID
+        response_dict = {
+            "answer": response.answer,
+            "sources": response.sources,
+            "tool_used": response.tool_used,
+            "tool_result": response.tool_result,
+            "intent": response.intent,
+            "debug_info": response.debug_info,
+            "execution_time": response.execution_time
+        }
+        if session_id:
+            response_dict["session_id"] = session_id
         
-        return AgentResponse(
-            answer=response.answer,
-            sources=source_docs,
-            tool_used=response.tool_used,
-            tool_result=response.tool_result,
-            intent=response.intent,
-            debug_info=response.debug_info if AGENT_DEBUG_MODE else [],
-            execution_time=response.execution_time
-        )
+        return response_dict
         
     except Exception as e:
         logger.error(f"Error in simple chat: {e}", exc_info=True)

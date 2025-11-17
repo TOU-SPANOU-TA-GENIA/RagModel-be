@@ -146,3 +146,36 @@ When context is provided in <context> tags, use it to answer questions.
 """
 
 SYSTEM_INSTRUCTION = load_system_instructions()
+
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class LLMConfig:
+    """Configuration for LLM models."""
+    model_name: str
+    max_tokens: int = 256  # Reduced for faster responses
+    temperature: float = 0.7
+    top_p: float = 0.9
+    device: str = "auto"
+    quantization: Optional[str] = "4bit"  # Force 4-bit for speed
+    
+    def to_dict(self):
+        return {
+            "model_name": self.model_name,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "device": self.device,
+            "quantization": self.quantization
+        }
+
+# Add fast LLM config
+FAST_LLM_CONFIG = {
+    "max_new_tokens": 256,  # Much shorter responses
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "do_sample": True,
+    "repetition_penalty": 1.1,
+    "pad_token_id": 128001,  # Pre-set to avoid auto-detection
+}
