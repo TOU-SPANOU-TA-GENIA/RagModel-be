@@ -491,12 +491,32 @@ class ToolChain:
 # Factory Functions
 # ============================================================================
 
+# app/tools/base.py - UPDATED create_default_tools() function
+# Replace the existing function with this version
 def create_default_tools() -> SimpleToolRegistry:
-    """Create a registry with default tools."""
+    """Create a registry with enhanced file tools."""
     registry = SimpleToolRegistry()
     
-    # Add file system tools
-    registry.register(ReadFileTool())
+    # Import enhanced tools
+    try:
+        from app.tools.enhanced_file_tools import create_enhanced_file_tools
+        
+        # Determine search directories
+        search_dirs = [KNOWLEDGE_DIR, DATA_DIR, BASE_DIR / "logs"]
+        
+        # Add enhanced file tools
+        enhanced_tools = create_enhanced_file_tools(search_dirs)
+        for tool in enhanced_tools.values():
+            registry.register(tool)
+        
+        logger.info("Registered enhanced file tools with smart search")
+    
+    except ImportError as e:
+        logger.warning(f"Enhanced file tools not available: {e}, using basic tools")
+        # Fallback to basic read tool
+        registry.register(ReadFileTool(allowed_dirs=[KNOWLEDGE_DIR, DATA_DIR]))
+    
+    # Add other file system tools
     registry.register(WriteFileTool())
     registry.register(ListFilesTool())
     
@@ -506,37 +526,40 @@ def create_default_tools() -> SimpleToolRegistry:
     logger.info(f"Created tool registry with {len(registry.tools)} tools")
     return registry
 
-
 def create_tool_registry_for_military() -> SimpleToolRegistry:
-    """
-    Create a tool registry with military-specific configurations.
-    This shows how to customize for your use case.
-    """
+    """Enhanced military registry with smart file tools."""
     registry = SimpleToolRegistry()
     
     # Configure allowed directories for military network
     military_dirs = [
-        Path("/opt/military_app/data"),
-        Path("/var/log/military_app"),
-        Path("/data/knowledge")
+        KNOWLEDGE_DIR,
+        DATA_DIR,
+        BASE_DIR / "logs",
     ]
     
-    # Add restricted file tools
-    read_tool = ReadFileTool(
-        allowed_dirs=[
-            KNOWLEDGE_DIR,  # Explicitly add
-            DATA_DIR,
-            BASE_DIR,
-        ]
-    )
-    write_tool = WriteFileTool(allowed_dirs=[Path("/data/outputs")])
+    # Import and use enhanced tools
+    try:
+        from app.tools.enhanced_file_tools import create_enhanced_file_tools
+        
+        enhanced_tools = create_enhanced_file_tools(military_dirs)
+        for tool in enhanced_tools.values():
+            registry.register(tool)
     
-    registry.register(read_tool)
+    except ImportError:
+        # Fallback
+        read_tool = ReadFileTool(allowed_dirs=military_dirs)
+        registry.register(read_tool)
+    
+    # Add write tool with restricted output directory
+    write_tool = WriteFileTool(allowed_dirs=[Path("/data/outputs")])
     registry.register(write_tool)
     
     # Add restricted command tool
     safe_commands = ["ls", "pwd", "date", "whoami", "df", "free"]
     registry.register(ExecuteCommandTool(allowed_commands=safe_commands))
     
-    logger.info("Created military-configured tool registry")
+    logger.info("Created military-configured tool registry with enhanced file tools")
     return registry
+
+
+

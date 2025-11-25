@@ -33,7 +33,7 @@ if not Path(EMBEDDING_MODEL_NAME).exists():
     EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 LLM_CONFIG = {
-    "max_new_tokens": 512,
+    "max_new_tokens": 2048,  # Increased for complete responses
     "temperature": 0.7,
     "top_p": 0.9,
     "do_sample": True,
@@ -170,12 +170,11 @@ class LLMConfig:
             "quantization": self.quantization
         }
 
-# Add fast LLM config
 FAST_LLM_CONFIG = {
-    "max_new_tokens": 256,  # Much shorter responses
+    "max_new_tokens": 2048,  # Increased for complete responses
     "temperature": 0.7,
     "top_p": 0.9,
     "do_sample": True,
     "repetition_penalty": 1.1,
-    "pad_token_id": 128001,  # Pre-set to avoid auto-detection
+    "pad_token_id": 128001,
 }

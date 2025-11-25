@@ -112,7 +112,7 @@ class FastLocalModelProvider(LLMProvider):
             
             # Use shorter parameters for first response
             gen_kwargs = {
-                "max_new_tokens": kwargs.get("max_tokens", 128),  # Even shorter for first response
+                "max_new_tokens": kwargs.get("max_tokens", 2048),  # Even shorter for first response
                 "temperature": kwargs.get("temperature", 0.7),
                 "top_p": kwargs.get("top_p", 0.9),
                 "do_sample": True,
@@ -136,8 +136,8 @@ class FastLocalModelProvider(LLMProvider):
                     response = generated_text.strip()
                 
                 # Truncate if too long (safety)
-                if len(response) > 500:
-                    response = response[:500] + "..."
+                # if len(response) > 500:
+                #     response = response[:500] + "..."
                 
                 elapsed = time.time() - start_time
                 logger.info(f"⚡ Generated {len(response)} chars in {elapsed:.2f}s")

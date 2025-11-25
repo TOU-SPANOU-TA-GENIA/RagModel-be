@@ -53,7 +53,17 @@ class ResponseCleaner:
             r'</?assistant[^>]*>',
             r'</assistant_response>',
             r'<response_[^>]+>',
+            r'<next_step>.*?(?:</next_step>|$)',  # NEW: Remove next_step tags
+            r'<thinking>.*?(?:</thinking>|$)',     # NEW: Remove thinking tags
+            r'<reasoning>.*?(?:</reasoning>|$)',   # NEW: Remove reasoning tags
             r'</[^>]+>',  # Catch-all for remaining closing tags
+        ]
+        
+        self.reasoning_patterns = [
+            r'\[REASONING:.*?\]',
+            r'\[INTERNAL:.*?\]',
+            r'\[DEBUG:.*?\]',
+            r'\[THOUGHT:.*?\]',
         ]
         
         # Patterns for instruction references
@@ -63,15 +73,7 @@ class ResponseCleaner:
         ]
     
     def clean(self, response: str) -> str:
-        """
-        Clean the response by removing all meta-instructions and artifacts.
-        
-        Args:
-            response: Raw LLM response
-            
-        Returns:
-            Cleaned response suitable for users
-        """
+        """Clean the response by removing all meta-instructions and artifacts."""
         if not response:
             return response
         
@@ -84,19 +86,23 @@ class ResponseCleaner:
         
         # Step 2: Remove XML/HTML tags
         for pattern in self.tag_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Step 3: Remove reasoning markers (NEW)
+        for pattern in self.reasoning_patterns:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
         
-        # Step 3: Remove instruction references
+        # Step 4: Remove instruction references
         for pattern in self.instruction_ref_patterns:
             cleaned = re.sub(pattern, 'your instruction', cleaned, flags=re.IGNORECASE)
         
-        # Step 4: Clean up whitespace
+        # Step 5: Clean up whitespace
         cleaned = self._normalize_whitespace(cleaned)
         
-        # Step 5: Remove empty parentheses
+        # Step 6: Remove empty parentheses
         cleaned = re.sub(r'\(\s*\)', '', cleaned)
         
-        # Step 6: Final cleanup
+        # Step 7: Final cleanup
         cleaned = cleaned.strip()
         
         # Log if significant cleaning occurred

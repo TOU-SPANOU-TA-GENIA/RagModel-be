@@ -147,10 +147,12 @@ class HybridIntentClassifier(IntentClassifier):
 # Decision Maker Implementations
 # ============================================================================
 
+# app/agent/classifiers.py - REPLACE SimpleDecisionMaker class
+
 class SimpleDecisionMaker(DecisionMaker):
     """
     Simple decision maker that decides based on intent and available tools.
-    Much cleaner than the original _make_decision method!
+    FIXED: Properly extracts file references and uses correct parameter names.
     """
     
     def __init__(self, tools: Optional[Dict[str, Tool]] = None):
@@ -159,7 +161,6 @@ class SimpleDecisionMaker(DecisionMaker):
     def decide(self, context: Context, intent: Intent) -> Decision:
         """Make a decision based on intent."""
         
-        # Start with defaults
         decision = Decision(
             intent=intent,
             confidence=1.0,
@@ -170,7 +171,6 @@ class SimpleDecisionMaker(DecisionMaker):
             reasoning=""
         )
         
-        # Handle based on intent
         if intent == Intent.CONVERSATION:
             decision.use_rag = False
             decision.reasoning = "Casual conversation, no tools or RAG needed"
@@ -188,49 +188,248 @@ class SimpleDecisionMaker(DecisionMaker):
                 decision.tool_name = tool_info['name']
                 decision.tool_params = tool_info['params']
                 decision.reasoning = f"Action requested, will use {tool_info['name']} tool"
+                
+                # Log for debugging
+                logger.info(f"Tool decision: {tool_info['name']} with params {tool_info['params']}")
             else:
                 decision.use_tool = False
                 decision.reasoning = "Action requested but no suitable tool found"
         
         context.add_debug(f"Decision: {decision.reasoning}")
-        logger.info(f"Decision made: {decision.reasoning}")
-        
         return decision
     
     def _identify_tool(self, query: str) -> Optional[Dict[str, Any]]:
         """Identify which tool to use based on query."""
         query_lower = query.lower()
         
-        # Check for file reading patterns
-        if any(word in query_lower for word in ['read', 'show', 'open', 'view', 'file']):
-            # Extract file path
-            file_path = self._extract_file_path(query)
-            if file_path:
+        # File reading operations
+        if any(word in query_lower for word in ['read', 'show', 'open', 'view', 'display', 'cat']):
+            if 'file' in query_lower or self._has_file_reference(query):
+                file_ref = self._extract_file_reference(query)
+                if file_ref:
+                    logger.debug(f"Identified file read operation for: {file_ref}")
+                    return {
+                        'name': 'read_file',
+                        'params': {'file_identifier': file_ref}  # FIXED: correct param name
+                    }
+        
+        # File search operations
+        if any(phrase in query_lower for phrase in ['find file', 'search file', 'locate file', 'look for']):
+            search_term = self._extract_search_term(query)
+            if search_term:
                 return {
-                    'name': 'read_file',
-                    'params': {'file_path': file_path}
+                    'name': 'search_files',
+                    'params': {'query': search_term}
                 }
         
-        # Add more tool patterns here as you add tools
+        # File writing operations
+        if any(word in query_lower for word in ['write', 'create', 'save']):
+            if 'file' in query_lower:
+                file_path, content = self._extract_write_params(query)
+                if file_path:
+                    return {
+                        'name': 'write_file',
+                        'params': {'file_path': file_path, 'content': content or ''}
+                    }
+        
+        # List directory operations
+        if any(phrase in query_lower for phrase in ['list files', 'show files', 'files in']):
+            directory = self._extract_directory(query)
+            return {
+                'name': 'list_files',
+                'params': {'directory': directory or '.'}
+            }
         
         return None
     
-    def _extract_file_path(self, query: str) -> Optional[str]:
-        """Extract file path from query."""
-        # Look for paths like /path/to/file or C:\path\to\file
-        patterns = [
-            r'(?:at|from|in)\s+([/\w\-\.]+)',
-            r'([/\w\-\.]+\.\w+)',  # Files with extensions
-            r'((?:/|[A-Z]:)[^\s]+)',  # Absolute paths
-        ]
+    def _has_file_reference(self, query: str) -> bool:
+        """Check if query likely references a file."""
+        import re
+        # Has file extension
+        if re.search(r'\.\w{2,4}\b', query):
+            return True
+        # Common file-related words
+        file_words = ['txt', 'file', 'document', 'config', 'log', 'data']
+        return any(word in query.lower() for word in file_words)
+    
+    # CRITICAL FIX: File Reference Extraction
+    # app/agent/classifiers.py - Replace _extract_file_reference method
+
+    def _extract_file_reference(self, query: str) -> Optional[str]:
+        """
+        Extract file path or name from query.
+        Handles spaces in paths, complex phrases, and various patterns.
+        """
+        import re
         
-        for pattern in patterns:
-            match = re.search(pattern, query)
-            if match:
-                return match.group(1)
+        # Remove common prefixes
+        query_clean = re.sub(
+            r'^(please\s+|could\s+you\s+|can\s+you\s+|would\s+you\s+)', 
+            '', 
+            query, 
+            flags=re.IGNORECASE
+        )
+        
+        # Pattern 1: "show me the contents of test.txt"
+        # Must handle "show me" separately to avoid extracting "me"
+        match = re.search(
+            r'(?:show|display)\s+'  # Action word
+            r'(?:me\s+)?'           # Optional "me"
+            r'(?:all\s+)?'          # Optional "all" - NEW
+            r'(?:the\s+)?'          # Optional "the"
+            r'(?:contents?\s+)?'    # Optional "content/contents"
+            r'(?:of\s+)?'           # Optional "of"
+            r'(?:the\s+)?'          # Optional "the" again
+            r'(?:file\s+)?'         # Optional "file"
+            r'(?:called\s+)?'       # Optional "called" - NEW
+            r'(?:named\s+)?'        # Optional "named" - NEW
+            r'([^\s,]+(?:\.\w+)?)', # THE FILENAME
+            query_clean,
+            re.IGNORECASE
+        )
+        if match:
+            candidate = match.group(1).strip('.,!?')
+            # Additional validation - reject if it's still a stop word
+            if candidate.lower() not in ['all', 'the', 'of', 'me', 'contents', 'content', 'file']:
+                return candidate
+        
+        # Pattern 2: "read test.txt" or "open file.txt"
+        match = re.search(
+            r'(?:read|open|view|cat)\s+(?:the\s+)?(?:file\s+)?([^\s,]+(?:\.\w+)?)',
+            query_clean,
+            re.IGNORECASE
+        )
+        if match:
+            return match.group(1).strip('.,!?')
+        
+        # Pattern 3: "read file test.txt"
+        match = re.search(
+            r'(?:read|open|show|view)\s+(?:the\s+)?file\s+([^\s,]+)',
+            query_clean,
+            re.IGNORECASE
+        )
+        if match:
+            return match.group(1).strip('.,!?')
+        
+        # Pattern 4: "contents of test.txt"
+        match = re.search(
+            r'contents?\s+(?:of\s+)?([^\s,]+(?:\.\w+)?)',
+            query_clean,
+            re.IGNORECASE
+        )
+        if match:
+            return match.group(1).strip('.,!?')
+        
+        # Pattern 5: Full path (with or without quotes)
+        # Handles: C:\path\with spaces\file.txt
+        # Must read from action word to end of string or comma
+        match = re.search(
+            r'(?:read|open)\s+["\']?([A-Za-z]:[^\'"]+?)["\']?(?:\s*$|,)',
+            query_clean,
+            re.IGNORECASE
+        )
+        if match:
+            # Path with spaces - take everything
+            return match.group(1).strip()
+        
+        # Pattern 6: Unix-style path
+        match = re.search(
+            r'(?:read|open)\s+(/[^\s,]+)',
+            query_clean,
+            re.IGNORECASE
+        )
+        if match:
+            return match.group(1).strip()
+        
+        # Pattern 7: Just filename with extension at end (last resort)
+        match = re.search(
+            r'([^\s/\\]+\.\w{2,4})\s*$',
+            query_clean,
+            re.IGNORECASE
+        )
+        if match:
+            return match.group(1).strip('.,!?')
         
         return None
 
+
+    # ADDITIONAL: Add helper to validate extracted reference
+    def _validate_file_reference(self, file_ref: str) -> bool:
+        """Check if extracted file reference is valid."""
+        if not file_ref:
+            return False
+        
+        # Filter out common false positives
+        stop_words = {'me', 'the', 'of', 'file', 'contents', 'content'}
+        if file_ref.lower() in stop_words:
+            return False
+        
+        # Must have reasonable length
+        if len(file_ref) < 2 or len(file_ref) > 500:
+            return False
+        
+        return True
+
+
+    # UPDATE: Modify _identify_tool to use validation
+    def _identify_tool(self, query: str) -> Optional[Dict[str, Any]]:
+        """Identify which tool to use based on query."""
+        query_lower = query.lower()
+        
+        # File reading operations
+        if any(word in query_lower for word in ['read', 'show', 'open', 'view', 'display', 'cat']):
+            if 'file' in query_lower or self._has_file_reference(query):
+                file_ref = self._extract_file_reference(query)
+                
+                # Validate extracted reference
+                if file_ref and self._validate_file_reference(file_ref):
+                    logger.debug(f"Identified file read operation for: {file_ref}")
+                    return {
+                        'name': 'read_file',
+                        'params': {'file_identifier': file_ref}
+                    }
+                else:
+                    logger.warning(f"Invalid file reference extracted: {file_ref}")
+        
+        return None
+    
+    def _extract_search_term(self, query: str) -> Optional[str]:
+        """Extract search term from query."""
+        import re
+        
+        # find file test
+        match = re.search(r'(?:find|search|locate|look for)\s+(?:file\s+)?(.+)', query, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        
+        return None
+    
+    def _extract_write_params(self, query: str) -> tuple:
+        """Extract file path and content for write operation."""
+        import re
+        
+        # write "content" to file.txt
+        match = re.search(r'write\s+["\'](.+?)["\']\s+to\s+([^\s]+)', query, re.IGNORECASE)
+        if match:
+            return match.group(2), match.group(1)
+        
+        # create file.txt
+        match = re.search(r'(?:create|write)\s+(?:file\s+)?([^\s]+)', query, re.IGNORECASE)
+        if match:
+            return match.group(1), None
+        
+        return None, None
+    
+    def _extract_directory(self, query: str) -> Optional[str]:
+        """Extract directory path from query."""
+        import re
+        
+        # list files in /path/to/dir
+        match = re.search(r'(?:in|from)\s+([^\s]+)', query, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        
+        return None
 
 class LLMDecisionMaker(DecisionMaker):
     """

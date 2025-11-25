@@ -121,10 +121,13 @@ class RAGRetrievalStep(PipelineStep):
         return "\n\n".join(context_parts)
 
 
+# app/agent/orchestrator.py - FIXED ToolExecutionStep class
+
 class ToolExecutionStep(PipelineStep):
     """Step 4: Execute tools if needed."""
     
     def __init__(self, tool_registry: Dict[str, Tool]):
+        """Initialize with tool registry."""
         self.tools = tool_registry
     
     @property
@@ -139,21 +142,41 @@ class ToolExecutionStep(PipelineStep):
             
             if tool:
                 try:
+                    # Log what we're doing
+                    logger.info(f"Executing tool: {decision.tool_name}")
+                    logger.debug(f"Tool parameters: {decision.tool_params}")
+                    
                     result = tool.execute(**decision.tool_params)
+                    
                     context.metadata["tool_result"] = result
                     context.metadata["tool_used"] = decision.tool_name
-                    logger.info(f"Tool {decision.tool_name} executed successfully")
+                    
+                    # Add debug info
+                    if result.get("success"):
+                        context.add_debug(f"✅ Tool {decision.tool_name} executed successfully")
+                        logger.info(f"Tool {decision.tool_name} executed successfully")
+                    else:
+                        error_msg = result.get("error", "Unknown error")
+                        context.add_debug(f"❌ Tool {decision.tool_name} failed: {error_msg}")
+                        logger.error(f"Tool execution failed: {error_msg}")
+                        
                 except Exception as e:
-                    logger.error(f"Tool execution failed: {e}")
+                    error_msg = f"Tool execution exception: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
+                    context.add_debug(f"❌ {error_msg}")
                     context.metadata["tool_result"] = {
                         "success": False,
-                        "error": str(e)
+                        "error": error_msg
                     }
             else:
                 logger.warning(f"Tool not found: {decision.tool_name}")
+                context.add_debug(f"⚠️ Tool '{decision.tool_name}' not found")
+                context.metadata["tool_result"] = {
+                    "success": False,
+                    "error": f"Tool '{decision.tool_name}' not found"
+                }
         
         return context
-
 
 class PromptBuildingStep(PipelineStep):
     """Step 5: Build the prompt for LLM."""

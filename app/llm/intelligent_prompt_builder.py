@@ -121,13 +121,203 @@ class IntelligentPromptBuilder(PromptBuilder):
             lines.append(f"{role}: {content}")
         return "\n".join(lines) if lines else "No conversation history"
     
+    # Complete _format_tool_result method for app/llm/intelligent_prompt_builder.py
+
     def _format_tool_result(self, tool_result: Dict[str, Any]) -> str:
-        """Format tool execution result."""
+        """
+        Format tool execution result for LLM context.
+        Handles all tool result types with clear instructions.
+        """
         if tool_result.get("success"):
             data = tool_result.get("data", {})
-            if isinstance(data, dict) and "content" in data:
-                return f"Tool execution successful:\n{data['content']}"
+            
+            # Case 1: Auto-selected file (NEW - handles multiple matches automatically)
+            if data.get("auto_selected"):
+                content = data.get("content", "")
+                file_name = data.get("file_name", "file")
+                selected_path = data.get("selected_path", "unknown")
+                other_versions = data.get("other_versions", [])
+                lines = data.get("lines", 0)
+                size = data.get("size_bytes", 0)
+                
+                result_text = f"""Successfully read file: {file_name}
+    Location: {selected_path}
+    Size: {size} bytes, {lines} lines
+
+    COMPLETE FILE CONTENT:
+    {content}
+
+    INSTRUCTIONS FOR YOUR RESPONSE:
+    1. Tell the user you successfully read {file_name}
+    2. Provide the complete content or answer questions based on it
+    3. DO NOT truncate or summarize unless specifically asked
+    4. DO NOT ask "which file" - this IS the file you read"""
+                
+                # Add info about other versions if they exist
+                if other_versions:
+                    result_text += f"\n\nNote: Found other versions at:"
+                    for path in other_versions[:3]:  # Show max 3
+                        result_text += f"\n  - {path}"
+                    result_text += "\n\n(I automatically selected the one from the knowledge directory)"
+                
+                return result_text
+            
+            # Case 2: Multiple file matches requiring user choice (FALLBACK - shouldn't happen with auto-select)
+            elif data.get("action_required") == "choose_file":
+                matches = data.get("matches", [])
+                query = data.get("query", "the query")
+                
+                if not matches:
+                    return "No files found matching the search criteria."
+                
+                # Format matches list with full paths
+                matches_list = []
+                for i, match in enumerate(matches, 1):
+                    matches_list.append(f"{i}. {match['name']} - {match['path']}")
+                
+                matches_text = "\n".join(matches_list)
+                
+                return f"""Multiple files found matching '{query}':
+
+    {matches_text}
+
+    CRITICAL INSTRUCTIONS:
+    You MUST show the user this EXACT numbered list above.
+    Ask them to choose by number (1-{len(matches)}) or provide the full path.
+
+    Format your response EXACTLY like this:
+    "I found {len(matches)} files matching '{query}':
+
+    {matches_text}
+
+    Which file would you like me to read? Please respond with a number (1-{len(matches)}) or the full path."
+
+    DO NOT give a vague response. Show the ACTUAL list."""
+            
+            # Case 3: Successful file read (standard single match)
+            elif "content" in data:
+                file_name = data.get("file_name", "file")
+                file_path = data.get("file_path", "unknown")
+                content = data.get("content", "")
+                lines = data.get("lines", 0)
+                size = data.get("size_bytes", 0)
+                
+                result_text = f"""Successfully read file: {file_name}
+    Path: {file_path}
+    Size: {size} bytes, {lines} lines
+
+    COMPLETE FILE CONTENT:
+    {content}
+
+    INSTRUCTIONS FOR YOUR RESPONSE:
+    1. Confirm you read "{file_name}"
+    2. Provide the content or answer questions using it
+    3. DO NOT truncate or summarize unless asked
+    4. The complete content is shown above - use it"""
+                
+                # Check if matched from search
+                if data.get("matched_from_search"):
+                    result_text += f"\n\n(Found this file by searching for: {data.get('search_query', 'file')})"
+                
+                return result_text
+            
+            # Case 4: File listing results
+            elif "files" in data:
+                files = data.get("files", [])
+                directory = data.get("directory", "directory")
+                
+                if not files:
+                    return f"No files found in {directory}"
+                
+                files_list = "\n".join([
+                    f"- {f['name']} ({f['size_bytes']} bytes)"
+                    for f in files
+                ])
+                
+                return f"""Files in {directory}:
+
+    {files_list}
+
+    Total: {len(files)} files
+
+    INSTRUCTIONS: List these files to the user in a clear format."""
+            
+            # Case 5: File write success
+            elif "bytes_written" in data:
+                file_path = data.get("file_path", "unknown")
+                bytes_written = data.get("bytes_written", 0)
+                
+                return f"""Successfully wrote file: {file_path}
+    Bytes written: {bytes_written}
+
+    INSTRUCTIONS: Confirm to the user that the file was created successfully."""
+            
+            # Case 6: Command execution results
+            elif "stdout" in data:
+                command = data.get("command", "command")
+                stdout = data.get("stdout", "")
+                stderr = data.get("stderr", "")
+                return_code = data.get("return_code", 0)
+                
+                result_text = f"""Command executed: {command}
+    Return code: {return_code}
+
+    Output:
+    {stdout}"""
+                
+                if stderr:
+                    result_text += f"\n\nErrors/Warnings:\n{stderr}"
+                
+                return result_text
+            
+            # Case 7: Search results
+            elif "matches" in data and data.get("action_required") != "choose_file":
+                matches = data.get("matches", [])
+                query = data.get("query", "query")
+                
+                if not matches:
+                    return f"No files found matching '{query}'"
+                
+                matches_list = "\n".join([
+                    f"- {m['name']} ({m['size_mb']} MB) - {m['path']}"
+                    for m in matches
+                ])
+                
+                return f"""Found {len(matches)} files matching '{query}':
+
+    {matches_list}
+
+    INSTRUCTIONS: Show this list to the user."""
+            
+            # Case 8: Generic successful tool execution
             else:
-                return f"Tool execution successful:\n{data}"
+                # Try to format data nicely
+                if isinstance(data, dict):
+                    formatted_data = "\n".join([f"{k}: {v}" for k, v in data.items()])
+                    return f"Tool executed successfully:\n\n{formatted_data}"
+                else:
+                    return f"Tool executed successfully:\n\n{data}"
+        
         else:
-            return f"Tool execution failed: {tool_result.get('error', 'Unknown error')}"
+            # Tool execution failed
+            error = tool_result.get("error", "Unknown error occurred")
+            
+            return f"""Tool execution FAILED.
+
+    Error: {error}
+
+    CRITICAL INSTRUCTIONS:
+    1. Tell the user the operation failed
+    2. Explain the error clearly: "{error}"
+    3. Suggest what they should try instead
+    4. DO NOT ask them to provide information manually
+    5. DO NOT pretend the operation succeeded
+
+    Example response:
+    "I tried to read the file but encountered an error: {error}
+
+    This might mean [explain likely cause]. You could try [suggest solution]."
+    """
+    
+    
+    

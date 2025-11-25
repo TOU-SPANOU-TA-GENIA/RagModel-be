@@ -100,9 +100,34 @@ FAILURE TO FOLLOW THESE INSTRUCTIONS IS NOT ACCEPTABLE.
         """Format tool result for prompt."""
         if tool_result.get("success"):
             data = tool_result.get("data", {})
-            if isinstance(data, dict) and "content" in data:
-                return f"Tool execution successful:\n{data['content']}"
-            else:
-                return f"Tool execution successful:\n{data}"
+            
+            # Handle multiple file matches
+            if "action_required" in data and data["action_required"] == "choose_file":
+                matches_text = "\n".join(
+                    f"  {i+1}. {m['name']} ({m['path']})"
+                    for i, m in enumerate(data.get("matches", []))
+                )
+                return f"""Multiple files found matching the query:
+    {matches_text}
+
+    Please ask the user which specific file they want to read."""
+            
+            # Handle successful file read
+            if "content" in data:
+                content = data["content"]
+                return f"""File read successfully: {data.get('file_name', 'unknown')}
+    Size: {data.get('size_bytes', 0)} bytes
+    Lines: {data.get('lines', 0)}
+
+    Content:
+    {content}
+
+    Please provide this information to the user in a clear, helpful way."""
+            
+            return f"Tool executed successfully:\n{data}"
         else:
-            return f"Tool execution failed: {tool_result.get('error', 'Unknown error')}"
+            error = tool_result.get("error", "Unknown error")
+            return f"""Tool execution FAILED with error: {error}
+
+    You MUST inform the user that the file operation failed and explain why.
+    Do NOT pretend it succeeded. Do NOT ask the user for the file contents."""
