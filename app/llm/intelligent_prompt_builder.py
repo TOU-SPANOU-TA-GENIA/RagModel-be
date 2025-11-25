@@ -194,6 +194,31 @@ class IntelligentPromptBuilder(PromptBuilder):
 
     DO NOT give a vague response. Show the ACTUAL list."""
             
+            elif "download_ready" in data and data.get("download_ready"):
+                file_name = data.get("file_name", "document")
+                file_type = data.get("file_type", "file")
+                file_path = data.get("file_path", "")
+                
+                # Extract just filename for download URL
+                from pathlib import Path
+                filename_only = Path(file_path).name
+                
+                return f"""✅ Document created successfully!
+
+    File: {file_name}
+    Type: {file_type.upper()}
+    Download: /download/{filename_only}
+
+    CRITICAL INSTRUCTIONS:
+    1. Tell user the document is ready
+    2. Provide download link: "Download your document here: [Download {file_name}](/download/{filename_only})"
+    3. Briefly mention what's included
+    4. DO NOT show file path or technical details
+    5. Keep response concise and helpful
+
+    Example: "I've created your {file_type.upper()} document '{data.get('title', 'document')}'. Download it here: [Download {file_name}](/download/{filename_only})"
+    """
+            
             # Case 3: Successful file read (standard single match)
             elif "content" in data:
                 file_name = data.get("file_name", "file")

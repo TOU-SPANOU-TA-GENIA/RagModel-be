@@ -2,13 +2,13 @@
 """
 FastAPI application with new modular agent architecture.
 """
-
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from datetime import datetime
 from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
+import mimetypes
 
 from .models import (
     NewChatRequest, MessageRequest, ChatResponse, UploadResponse,
@@ -442,6 +442,34 @@ async def ingest_all_documents(rebuild: bool = False):
 # ============================================================================
 # Agent Capabilities Endpoint
 # ============================================================================
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """Download generated file."""
+    try:
+        file_path = BASE_DIR / "outputs" / filename
+        
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found: {filename}"
+            )
+        
+        # Determine MIME type
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type=mime_type or 'application/octet-stream'
+        )
+        
+    except Exception as e:
+        logger.error(f"Download failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to download file"
+        )
 
 @app.get("/agent/capabilities")
 async def get_agent_capabilities():

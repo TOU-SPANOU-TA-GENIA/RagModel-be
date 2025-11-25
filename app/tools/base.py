@@ -3,7 +3,6 @@
 Simplified Tool System.
 Clean, modular tools that are easy to create, test, and debug.
 """
-
 from typing import Dict, Any, List, Optional, Callable
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -523,8 +522,17 @@ def create_default_tools() -> SimpleToolRegistry:
     # Add system tools (with restrictions)
     registry.register(ExecuteCommandTool())
     
+    # Add document generator tool (LAZY IMPORT HERE) ✅
+    try:
+        from app.tools.document_generator import DocumentGeneratorTool
+        registry.register(DocumentGeneratorTool())
+        logger.info("Registered document generator tool")
+    except ImportError as e:
+        logger.warning(f"Document generator not available: {e}")
+    
     logger.info(f"Created tool registry with {len(registry.tools)} tools")
     return registry
+
 
 def create_tool_registry_for_military() -> SimpleToolRegistry:
     """Enhanced military registry with smart file tools."""

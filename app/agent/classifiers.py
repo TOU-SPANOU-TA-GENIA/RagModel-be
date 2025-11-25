@@ -35,14 +35,18 @@ class RuleBasedIntentClassifier(IntentClassifier):
                     'read', 'open', 'show', 'display', 'view', 'check', 'see',
                     'get', 'fetch', 'look at', 'look in', "what's in",
                     'execute', 'run', 'create', 'write', 'update', 'delete',
-                    'cat', 'show me', 'display the', 'read the'
+                    'cat', 'show me', 'display the', 'read the',
+                    'build', 'generate', 'make', 'produce',  # ADD THESE
+                    'document', 'powerpoint', 'word', 'pdf', 'presentation'  # ADD THESE
                 ],
                 'patterns': [
                     r'(read|show|open|view)\s+(the\s+)?file',
                     r'file\s+at\s+[/\w]+',
                     r'(content|contents)\s+of',
+                    r'(build|create|generate|make)\s+(a|an)?\s+(word|powerpoint|pdf|document|presentation)',  # ADD THIS
+                    r'(build|create|generate)\s+.*\s+(document|powerpoint|presentation|word|pdf)',  # ADD THIS
                 ],
-                'weight': 1.5  # Actions get priority
+                'weight': 1.5
             },
             Intent.QUESTION: {
                 'keywords': [
@@ -239,8 +243,65 @@ class SimpleDecisionMaker(DecisionMaker):
                 'name': 'list_files',
                 'params': {'directory': directory or '.'}
             }
+            
+        # Document generation operations
+        if any(word in query_lower for word in ['create', 'build', 'generate', 'make']):
+            doc_type, title, description = self._extract_document_request(query)
+            if doc_type:
+                return {
+                    'name': 'generate_document',
+                    'params': {
+                        'doc_type': doc_type,
+                        'title': title or 'Generated Document',
+                        'content': description or ''
+                    }
+                }
         
         return None
+    
+    def _extract_document_request(self, query: str) -> tuple:
+        """Extract document type, title, and description from query."""
+        import re
+        
+        query_lower = query.lower()
+        
+        # Detect document type
+        doc_types = {
+            'word': 'docx',
+            'doc': 'docx',
+            'docx': 'docx',
+            'powerpoint': 'pptx',
+            'ppt': 'pptx',
+            'pptx': 'pptx',
+            'presentation': 'pptx',
+            'pdf': 'pdf',
+            'text': 'txt',
+            'markdown': 'md'
+        }
+        
+        doc_type = None
+        for keyword, file_type in doc_types.items():
+            if keyword in query_lower:
+                doc_type = file_type
+                break
+        
+        if not doc_type:
+            return None, None, None
+        
+        # Extract title/topic
+        patterns = [
+            r'(?:about|regarding|on)\s+(.+?)(?:\s+with|\s+that|\s*$)',
+            r'(?:build|create|generate|make)\s+(?:a|an)?\s+\w+\s+(.+?)(?:\s+with|\s*$)',
+        ]
+        
+        title = None
+        for pattern in patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                title = match.group(1).strip()
+                break
+        
+        return doc_type, title, query
     
     def _has_file_reference(self, query: str) -> bool:
         """Check if query likely references a file."""
@@ -375,6 +436,21 @@ class SimpleDecisionMaker(DecisionMaker):
     def _identify_tool(self, query: str) -> Optional[Dict[str, Any]]:
         """Identify which tool to use based on query."""
         query_lower = query.lower()
+        
+        # Document generation operations - CHECK THIS FIRST (before file operations)
+        if any(word in query_lower for word in ['create', 'build', 'generate', 'make']):
+            if any(doc_word in query_lower for doc_word in ['document', 'word', 'powerpoint', 'presentation', 'pdf', 'ppt', 'docx']):
+                doc_type, title, content_hint = self._extract_document_request(query)
+                if doc_type:
+                    logger.info(f"📄 Detected document generation: {doc_type} - {title}")
+                    return {
+                        'name': 'generate_document',
+                        'params': {
+                            'doc_type': doc_type,
+                            'title': title or 'Generated Document',
+                            'content': content_hint or query  # Pass full query as content hint
+                        }
+                    }
         
         # File reading operations
         if any(word in query_lower for word in ['read', 'show', 'open', 'view', 'display', 'cat']):

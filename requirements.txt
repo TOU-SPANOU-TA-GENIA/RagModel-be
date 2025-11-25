@@ -22,3 +22,5 @@ aiofiles
 
 bitsandbytes
 hf_xet
+
+python-docx
