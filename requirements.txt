@@ -24,3 +24,4 @@ bitsandbytes
 hf_xet
 
 python-docx
+python-pptx
