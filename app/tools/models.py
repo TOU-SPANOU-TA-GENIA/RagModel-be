@@ -18,7 +18,7 @@ logger = setup_logger(__name__)
 class ToolResult:
     """Standardized tool execution result."""
     success: bool
-    data: Any
+    data: Any = None
     error: Optional[str] = None
     execution_time: float = 0.0
     

@@ -3,7 +3,6 @@
 GPU detection and management utilities.
 """
 
-import torch
 from typing import Dict, Optional
 
 from app.utils.logger import setup_logger
@@ -11,9 +10,19 @@ from app.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+def _get_torch():
+    """Lazy import torch."""
+    try:
+        import torch
+        return torch
+    except ImportError:
+        return None
+
+
 def get_gpu_info() -> Optional[Dict]:
     """Get GPU information if available."""
-    if not torch.cuda.is_available():
+    torch = _get_torch()
+    if torch is None or not torch.cuda.is_available():
         return None
     
     try:
@@ -36,14 +45,16 @@ def get_gpu_info() -> Optional[Dict]:
 
 def clear_gpu_cache():
     """Clear GPU memory cache."""
-    if torch.cuda.is_available():
+    torch = _get_torch()
+    if torch is not None and torch.cuda.is_available():
         torch.cuda.empty_cache()
         logger.info("GPU cache cleared")
 
 
 def log_gpu_memory():
     """Log current GPU memory usage."""
-    if torch.cuda.is_available():
+    torch = _get_torch()
+    if torch is not None and torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated(0) / 1e9
         reserved = torch.cuda.memory_reserved(0) / 1e9
         logger.info(f"GPU Memory - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
@@ -51,7 +62,8 @@ def log_gpu_memory():
 
 def get_optimal_device() -> str:
     """Determine the optimal compute device."""
-    if torch.cuda.is_available():
+    torch = _get_torch()
+    if torch is not None and torch.cuda.is_available():
         gpu_info = get_gpu_info()
         if gpu_info:
             logger.info(f"Using GPU: {gpu_info['name']} ({gpu_info['total_memory_gb']:.2f}GB)")
