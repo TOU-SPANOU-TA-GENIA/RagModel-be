@@ -34,6 +34,7 @@ class AgentResponse:
     intent: str = "unknown"
     debug_info: List[str] = field(default_factory=list)
     execution_time: float = 0.0
+    internal_thinking: Optional[str] = None  # Model's internal reasoning
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API response."""
@@ -121,8 +122,6 @@ class RAGRetrievalStep(PipelineStep):
         return "\n\n".join(context_parts)
 
 
-# app/agent/orchestrator.py - FIXED ToolExecutionStep class
-
 class ToolExecutionStep(PipelineStep):
     """Step 4: Execute tools if needed."""
     
@@ -142,7 +141,6 @@ class ToolExecutionStep(PipelineStep):
             
             if tool:
                 try:
-                    # Log what we're doing
                     logger.info(f"Executing tool: {decision.tool_name}")
                     logger.debug(f"Tool parameters: {decision.tool_params}")
                     
@@ -151,7 +149,6 @@ class ToolExecutionStep(PipelineStep):
                     context.metadata["tool_result"] = result
                     context.metadata["tool_used"] = decision.tool_name
                     
-                    # Add debug info
                     if result.get("success"):
                         context.add_debug(f"✅ Tool {decision.tool_name} executed successfully")
                         logger.info(f"Tool {decision.tool_name} executed successfully")
@@ -178,6 +175,7 @@ class ToolExecutionStep(PipelineStep):
         
         return context
 
+
 class PromptBuildingStep(PipelineStep):
     """Step 5: Build the prompt for LLM."""
     
@@ -189,11 +187,9 @@ class PromptBuildingStep(PipelineStep):
         return "Prompt Building"
     
     def process(self, context: Context) -> Context:
-        # Gather all components for prompt
         rag_context = context.metadata.get("rag_context", "")
         tool_result = context.metadata.get("tool_result")
         
-        # Build prompt with all relevant info
         prompt = self.prompt_builder.build(
             context,
             rag_context=rag_context,
@@ -205,38 +201,140 @@ class PromptBuildingStep(PipelineStep):
         return context
 
 
-class LLMGenerationStep(PipelineStep):
-    """Step 6: Generate response using LLM."""
+class ThinkingAwareLLMGenerationStep(PipelineStep):
+    """
+    Step 6: Generate response with internal thinking in a single LLM call.
     
-    def __init__(self, llm_provider: LLMProvider):
+    Flow:
+    1. Build prompt that asks model to think first, then respond
+    2. Generate both thinking and response in one call
+    3. Parse out thinking (for debug) and response (for user)
+    4. Clean response to remove any leaked artifacts
+    
+    This single-call approach gives the model true continuity between
+    thinking and responding, similar to chain-of-thought prompting.
+    """
+    
+    def __init__(
+        self, 
+        llm_provider: LLMProvider, 
+        enable_thinking: bool = True
+    ):
         self.llm = llm_provider
+        self.enable_thinking = enable_thinking
     
     @property
     def name(self) -> str:
         return "LLM Generation"
     
     def process(self, context: Context) -> Context:
+        """Generate thinking and response in a single LLM call."""
         prompt = context.metadata.get("prompt", context.query)
         
         try:
-            # Generate raw response
-            raw_response = self.llm.generate(prompt)
+            if self.enable_thinking:
+                # Single call: thinking + response together
+                enhanced_prompt = self._build_thinking_prompt(prompt, context)
+                raw_output = self.llm.generate(enhanced_prompt)
+                
+                # Parse thinking and response from output
+                thinking, response = self._parse_output(raw_output)
+                
+                context.metadata["_internal_thinking"] = thinking
+                logger.debug(f"Thinking: {thinking[:100]}..." if thinking else "No thinking parsed")
+            else:
+                response = self.llm.generate(prompt)
             
-            # Clean the response
-            cleaned_response = clean_response(raw_response)
-            
+            # Clean any remaining artifacts
+            cleaned_response = clean_response(response)
             context.metadata["llm_response"] = cleaned_response
-            logger.info(f"Generated and cleaned response: {len(cleaned_response)} chars")
+            
+            logger.info(f"Generated response: {len(cleaned_response)} chars")
             
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             context.metadata["llm_response"] = "I apologize, but I encountered an error."
         
         return context
+    
+    def _build_thinking_prompt(self, base_prompt: str, context: Context) -> str:
+        """Build prompt that elicits thinking followed by response."""
+        # Gather context info for thinking
+        intent = context.metadata.get("intent", "unknown")
+        if hasattr(intent, "value"):
+            intent = intent.value
+        
+        has_rag = bool(context.metadata.get("rag_context"))
+        has_tool = bool(context.metadata.get("tool_result"))
+        
+        thinking_instruction = f"""Before responding, think through the following in <thinking> tags:
+1. What is the user asking for? (Intent: {intent})
+2. What information do I have? (Knowledge: {has_rag}, Tool result: {has_tool})
+3. What tone and style should I use?
+4. What are the key points to address?
+
+Then provide your response in <response> tags.
+
+Format:
+<thinking>
+[Your reasoning here - 2-3 sentences]
+</thinking>
+
+<response>
+[Your actual response to the user]
+</response>
+
+"""
+        return thinking_instruction + base_prompt
+    
+    def _parse_output(self, raw_output: str) -> tuple:
+        """
+        Parse thinking and response from model output.
+        Returns (thinking, response) tuple.
+        """
+        import re
+        
+        thinking = ""
+        response = raw_output  # Default to full output if parsing fails
+        
+        # Try to extract thinking
+        thinking_match = re.search(
+            r'<thinking>(.*?)</thinking>', 
+            raw_output, 
+            re.DOTALL | re.IGNORECASE
+        )
+        if thinking_match:
+            thinking = thinking_match.group(1).strip()
+        
+        # Try to extract response
+        response_match = re.search(
+            r'<response>(.*?)</response>', 
+            raw_output, 
+            re.DOTALL | re.IGNORECASE
+        )
+        if response_match:
+            response = response_match.group(1).strip()
+        else:
+            # Fallback: remove thinking tags and use the rest
+            response = re.sub(
+                r'<thinking>.*?</thinking>', 
+                '', 
+                raw_output, 
+                flags=re.DOTALL | re.IGNORECASE
+            ).strip()
+            
+            # Also remove any stray tags
+            response = re.sub(r'</?(?:thinking|response)>', '', response).strip()
+        
+        return thinking, response
+
+
+# Backwards compatibility alias
+LLMGenerationStep = ThinkingAwareLLMGenerationStep
 
 
 # ============================================================================
-# Main Orchestrator (simplified)
+# Main Orchestrator
 # ============================================================================
 
 class SimpleAgentOrchestrator:
@@ -245,21 +343,32 @@ class SimpleAgentOrchestrator:
     Each component has a single responsibility.
     """
     
-    def __init__(self,
-                 intent_classifier: IntentClassifier,
-                 decision_maker: DecisionMaker,
-                 llm_provider: LLMProvider,
-                 retriever: Optional[Retriever] = None,
-                 prompt_builder: Optional[PromptBuilder] = None):
+    def __init__(
+        self,
+        intent_classifier: IntentClassifier,
+        decision_maker: DecisionMaker,
+        llm_provider: LLMProvider,
+        retriever: Optional[Retriever] = None,
+        prompt_builder: Optional[PromptBuilder] = None,
+        enable_thinking: bool = True
+    ):
         """
         Initialize with injected dependencies.
-        This makes it easy to swap implementations.
+        
+        Args:
+            intent_classifier: Classifies user intent
+            decision_maker: Decides which tools/RAG to use
+            llm_provider: Generates responses
+            retriever: Optional RAG retriever
+            prompt_builder: Optional custom prompt builder
+            enable_thinking: Enable internal reasoning phase
         """
         self.intent_classifier = intent_classifier
         self.decision_maker = decision_maker
         self.llm_provider = llm_provider
         self.retriever = retriever
         self.prompt_builder = prompt_builder
+        self.enable_thinking = enable_thinking
         self.tools: Dict[str, Tool] = {}
         
         # Build the processing pipeline
@@ -268,7 +377,7 @@ class SimpleAgentOrchestrator:
         # Setup debug event handlers
         self._setup_debug_handlers()
         
-        logger.info("SimpleAgentOrchestrator initialized")
+        logger.info(f"SimpleAgentOrchestrator initialized (thinking={enable_thinking})")
     
     def _build_pipeline(self) -> Pipeline:
         """Build the processing pipeline."""
@@ -286,7 +395,11 @@ class SimpleAgentOrchestrator:
         if self.prompt_builder:
             pipeline.add_step(PromptBuildingStep(self.prompt_builder))
         
-        pipeline.add_step(LLMGenerationStep(self.llm_provider))
+        # Use thinking-aware generation
+        pipeline.add_step(ThinkingAwareLLMGenerationStep(
+            self.llm_provider,
+            enable_thinking=self.enable_thinking
+        ))
         
         return pipeline
     
@@ -307,16 +420,16 @@ class SimpleAgentOrchestrator:
         self, 
         query: str, 
         chat_history: List[Dict[str, str]] = None,
-        metadata: Dict[str, Any] = None  # ADD THIS PARAMETER
+        metadata: Dict[str, Any] = None
     ) -> AgentResponse:
         """Process query with conversation memory support."""
         start_time = time.time()
         
-        # Create context WITH provided metadata (includes session_id)
+        # Create context with provided metadata
         context = Context(
             query=query,
             chat_history=chat_history or [],
-            metadata=metadata or {},  # CHANGED: Use provided metadata
+            metadata=metadata or {},
             debug_info=[]
         )
         
@@ -362,18 +475,27 @@ class SimpleAgentOrchestrator:
     
     def _build_response(self, context: Context) -> AgentResponse:
         """Build the final response from context."""
+        # Collect debug info including internal thinking
+        debug_info = context.debug_info.copy()
+        
+        # Get internal thinking
+        internal_thinking = context.metadata.get("_internal_thinking")
+        if internal_thinking:
+            debug_info.append(f"🧠 Internal Thinking:\n{internal_thinking}")
+        
         return AgentResponse(
             answer=context.metadata.get("llm_response", "No response generated"),
             sources=context.metadata.get("rag_sources", []),
             tool_used=context.metadata.get("tool_used"),
             tool_result=context.metadata.get("tool_result"),
             intent=context.metadata.get("intent", Intent.UNKNOWN).value,
-            debug_info=context.debug_info
+            debug_info=debug_info,
+            internal_thinking=internal_thinking
         )
 
 
 # ============================================================================
-# Factory Function (replaces create_agent)
+# Factory Function
 # ============================================================================
 
 def create_simple_agent(
@@ -381,18 +503,19 @@ def create_simple_agent(
     intent_classifier: IntentClassifier,
     decision_maker: DecisionMaker,
     retriever: Optional[Retriever] = None,
-    prompt_builder: Optional[PromptBuilder] = None
+    prompt_builder: Optional[PromptBuilder] = None,
+    enable_thinking: bool = True
 ) -> SimpleAgentOrchestrator:
     """
     Factory function to create an agent with dependencies.
-    This replaces the old create_agent function.
     """
     agent = SimpleAgentOrchestrator(
         intent_classifier=intent_classifier,
         decision_maker=decision_maker,
         llm_provider=llm_provider,
         retriever=retriever,
-        prompt_builder=prompt_builder
+        prompt_builder=prompt_builder,
+        enable_thinking=enable_thinking
     )
     
     return agent

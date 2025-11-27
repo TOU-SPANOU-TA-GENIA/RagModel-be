@@ -234,7 +234,6 @@ async def simple_chat(msg: MessageRequest, session_id: Optional[str] = None):
 
 
 def _build_agent_response(response) -> AgentResponse:
-    """Build AgentResponse from orchestrator response."""
     source_docs = [
         SourceDocument(
             content=src.get("content", ""),
@@ -251,9 +250,9 @@ def _build_agent_response(response) -> AgentResponse:
         tool_result=response.tool_result,
         intent=response.intent,
         debug_info=response.debug_info if AGENT.debug_mode else [],
-        execution_time=response.execution_time
+        execution_time=response.execution_time,
+        internal_thinking=response.internal_thinking  # ADD THIS LINE
     )
-
 
 # =============================================================================
 # File Endpoints

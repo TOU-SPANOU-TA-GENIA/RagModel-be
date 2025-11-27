@@ -72,6 +72,9 @@ class AgentConfig:
         self.system_instruction = SYSTEM_INSTRUCTION
         self.debug_mode = False
         
+        # Thinking settings
+        self.enable_thinking = True  # Enable internal reasoning phase
+        
     @classmethod
     def for_development(cls) -> 'AgentConfig':
         """Create config for development/testing."""
@@ -117,6 +120,9 @@ class AgentBuilder:
     def __init__(self, config: Optional[AgentConfig] = None):
         self.config = config or AgentConfig()
         
+        # Get thinking setting safely from config attribute
+        self.enable_thinking = getattr(self.config, 'enable_thinking', True)
+        
         # Components (will be initialized)
         self.llm_provider = None
         self.intent_classifier = None
@@ -135,7 +141,7 @@ class AgentBuilder:
             # Use pre-warmed provider for maximum speed
             self.llm_provider = create_llm_provider(
                 model_name=self.config.llm_model_name,
-                provider_type="prewarmed",  # Use pre-warmed provider
+                provider_type="prewarmed",
                 use_cache=self.config.use_cache
             )
         return self
@@ -164,7 +170,6 @@ class AgentBuilder:
             self.retriever = create_mock_retriever()
         else:
             logger.info("Creating in-memory retriever")
-            # Always use in-memory for performance
             from app.rag.retrievers import SimpleRetriever, LocalEmbeddingProvider
             from app.core.memory_store import FastInMemoryVectorStore, CachedEmbeddingProvider
             
@@ -209,8 +214,6 @@ class AgentBuilder:
         )
         registry.register(read_tool)
         
-        # Add more tools as needed
-        
         return registry
     
     def build_prompt_builder(self) -> 'AgentBuilder':
@@ -231,7 +234,6 @@ class AgentBuilder:
             logger.info("Using IntelligentPromptBuilder with context filtering")
         except ImportError as e:
             logger.warning(f"IntelligentPromptBuilder not available: {e}, using fallback")
-            # Fallback to existing builder
             from app.llm.providers import create_prompt_builder
             self.prompt_builder = create_prompt_builder(
                 system_instruction=self.config.system_instruction,
@@ -246,18 +248,19 @@ class AgentBuilder:
         
         # Build all components
         self.build_llm_provider()
-        self.build_tools()  # Build tools before classifiers
+        self.build_tools()
         self.build_classifiers()
         self.build_retriever()
         self.build_prompt_builder()
         
-        # Create orchestrator
+        # Create orchestrator with thinking enabled
         orchestrator = SimpleAgentOrchestrator(
             intent_classifier=self.intent_classifier,
             decision_maker=self.decision_maker,
             llm_provider=self.llm_provider,
             retriever=self.retriever,
-            prompt_builder=self.prompt_builder
+            prompt_builder=self.prompt_builder,
+            enable_thinking=self.enable_thinking
         )
         
         # Add tools to orchestrator
@@ -269,7 +272,7 @@ class AgentBuilder:
         if self.config.debug_mode:
             self._setup_debug_events()
         
-        logger.info("Agent orchestrator built successfully")
+        logger.info(f"Agent orchestrator built successfully (thinking={self.enable_thinking})")
         return orchestrator
     
     def _setup_debug_events(self):
@@ -293,7 +296,6 @@ def create_agent(
 ) -> SimpleAgentOrchestrator:
     """
     Main factory function to create an agent.
-    This replaces your original create_agent function.
     
     Args:
         mode: "development", "production", or "military"
@@ -302,7 +304,6 @@ def create_agent(
     Returns:
         Configured agent orchestrator
     """
-    # Get appropriate config
     if config is None:
         if mode == "development":
             config = AgentConfig.for_development()
@@ -311,7 +312,6 @@ def create_agent(
         else:
             config = AgentConfig.for_production()
     
-    # Build agent
     builder = AgentBuilder(config)
     agent = builder.build()
     
@@ -320,10 +320,7 @@ def create_agent(
 
 
 def create_minimal_agent() -> SimpleAgentOrchestrator:
-    """
-    Create a minimal agent for testing.
-    No RAG, no tools, mock LLM.
-    """
+    """Create a minimal agent for testing."""
     config = AgentConfig()
     config.use_mock_llm = True
     config.use_rag = False
@@ -334,10 +331,7 @@ def create_minimal_agent() -> SimpleAgentOrchestrator:
 
 
 def create_rag_only_agent() -> SimpleAgentOrchestrator:
-    """
-    Create an agent with only RAG capabilities.
-    Useful for Q&A systems.
-    """
+    """Create an agent with only RAG capabilities."""
     config = AgentConfig()
     config.enable_tools = False
     config.use_rag = True
@@ -347,10 +341,7 @@ def create_rag_only_agent() -> SimpleAgentOrchestrator:
 
 
 def create_tool_only_agent() -> SimpleAgentOrchestrator:
-    """
-    Create an agent with only tool capabilities.
-    Useful for automation tasks.
-    """
+    """Create an agent with only tool capabilities."""
     config = AgentConfig()
     config.use_rag = False
     config.enable_tools = True
@@ -364,10 +355,7 @@ def create_tool_only_agent() -> SimpleAgentOrchestrator:
 # ============================================================================
 
 class AgentManager:
-    """
-    Singleton manager for the agent.
-    Ensures only one agent instance exists.
-    """
+    """Singleton manager for the agent."""
     
     _instance = None
     _agent = None
@@ -401,14 +389,11 @@ agent_manager = AgentManager()
 
 
 # ============================================================================
-# Convenience Functions (for backward compatibility)
+# Convenience Functions
 # ============================================================================
 
 def get_agent() -> SimpleAgentOrchestrator:
-    """
-    Get the global agent instance.
-    This maintains compatibility with your existing code.
-    """
+    """Get the global agent instance."""
     return agent_manager.get_agent()
 
 
@@ -416,10 +401,7 @@ def process_query(
     query: str,
     chat_history: Optional[List[Dict[str, str]]] = None
 ) -> AgentResponse:
-    """
-    Process a query using the global agent.
-    Convenience function for simple usage.
-    """
+    """Process a query using the global agent."""
     agent = get_agent()
     return agent.process_query(query, chat_history)
 
@@ -462,5 +444,4 @@ def test_agent_pipeline():
 
 
 if __name__ == "__main__":
-    # Run tests if executed directly
     test_agent_pipeline()

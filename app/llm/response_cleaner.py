@@ -45,6 +45,11 @@ class ResponseCleaner:
             r'<assistant_preferences:.*?>',
             r'<response_structure>.*?</response_structure>',
             r'<response_rules>.*?</response_rules>',
+            
+            # Thinking-related meta-commentary
+            r'Internal analysis[^:]*:.*?(?=\n\n|\Z)',
+            r'\(DO NOT include in response\)',
+            r'Guidelines:.*?(?=\n\n|\Z)',
         ]
         
         # Patterns for XML/HTML tags
@@ -53,10 +58,16 @@ class ResponseCleaner:
             r'</?assistant[^>]*>',
             r'</assistant_response>',
             r'<response_[^>]+>',
-            r'<next_step>.*?(?:</next_step>|$)',  # NEW: Remove next_step tags
-            r'<thinking>.*?(?:</thinking>|$)',     # NEW: Remove thinking tags
-            r'<reasoning>.*?(?:</reasoning>|$)',   # NEW: Remove reasoning tags
+            r'<next_step>.*?(?:</next_step>|$)',
+            r'<reasoning>.*?(?:</reasoning>|$)',
             r'</[^>]+>',  # Catch-all for remaining closing tags
+            
+            # Thinking-related tags (content already parsed out, just clean stray tags)
+            r'</?thinking[^>]*>',
+            r'</?response[^>]*>',
+            r'</?internal_analysis[^>]*>',
+            r'</?response_guidance[^>]*>',
+            r'</?internal_guidance[^>]*>',
         ]
         
         self.reasoning_patterns = [
@@ -88,7 +99,7 @@ class ResponseCleaner:
         for pattern in self.tag_patterns:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
         
-        # Step 3: Remove reasoning markers (NEW)
+        # Step 3: Remove reasoning markers
         for pattern in self.reasoning_patterns:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
         

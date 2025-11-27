@@ -19,6 +19,7 @@ from .prewarmed_provider import PreWarmedLLMProvider
 from .intelligent_prompt_builder import IntelligentPromptBuilder
 from .context_aware_prompt_builder import ContextAwarePromptBuilder
 from .tool_result_formatter import tool_result_formatter
+from .thinking_aware_generation import ThinkingAwareLLMGenerationStep
 
 __all__ = [
     "LLMConfig",
@@ -34,5 +35,6 @@ __all__ = [
     "PreWarmedLLMProvider",
     "IntelligentPromptBuilder",
     "ContextAwarePromptBuilder",
-    "tool_result_formatter"
+    "tool_result_formatter",
+    "ThinkingAwareLLMGenerationStep"
 ]

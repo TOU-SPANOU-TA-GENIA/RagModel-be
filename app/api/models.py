@@ -81,6 +81,7 @@ class AgentResponse(BaseModel):
     debug_info: List[str] = Field(default_factory=list, description="Debug information")
     execution_time: float = Field(default=0.0, description="Processing time in seconds")
     session_id: Optional[str] = Field(None, description="Session ID for conversation continuity")
+    internal_thinking: Optional[str] = Field(None, description="Model's internal reasoning (debug)")
 
 
 # =============================================================================
