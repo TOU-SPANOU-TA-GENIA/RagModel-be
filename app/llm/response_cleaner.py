@@ -6,7 +6,7 @@ Ensures users see clean, professional responses without implementation details.
 
 import re
 from typing import List, Tuple
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import json
 
 from app.tools.base import BaseTool, ToolResult
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 from app.config import BASE_DIR
 
 logger = setup_logger(__name__)

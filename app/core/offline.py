@@ -1,34 +1,34 @@
-# app/offline_mode.py
+# app/core/offline.py
 """
-Enforce offline mode - block all network access.
-Import this at the start of main.py for security.
+Offline mode utilities - disables network access for air-gapped deployments.
 """
 
 import os
 import socket
 
-def disable_network():
+
+def enable_offline_mode():
     """
-    Disable network access for security.
-    Call this at application startup.
+    Enable offline mode by setting environment variables.
+    Call this at application startup for air-gapped deployments.
     """
-    # Set environment variables to disable HuggingFace downloads
+    # Disable HuggingFace downloads
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
     
-    # Disable network for sentence-transformers
+    # Set local cache directory for sentence-transformers
     os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(
         os.path.join(os.getcwd(), "offline_models", "embeddings")
     )
     
     print("✓ Offline mode enabled - network access disabled for models")
 
-# Optional: More aggressive network blocking (use with caution)
+
 def block_network_completely():
     """
-    Completely block network access (very aggressive).
-    Only use if absolutely necessary.
+    Completely block network access.
+    Use with caution - affects all network operations.
     """
     original_socket = socket.socket
     
@@ -37,3 +37,8 @@ def block_network_completely():
     
     socket.socket = guarded_socket
     print("⚠ Network completely blocked")
+
+
+def is_offline_mode() -> bool:
+    """Check if offline mode is enabled."""
+    return os.environ.get("HF_HUB_OFFLINE") == "1"

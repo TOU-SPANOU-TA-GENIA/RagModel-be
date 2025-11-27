@@ -1,7 +1,9 @@
 # app/agent/__init__.py
 from .integration import create_agent, get_agent, AgentConfig
 from .orchestrator import SimpleAgentOrchestrator
-from .classifiers import RuleBasedIntentClassifier, SimpleDecisionMaker
+from .intent_classifiers import RuleBasedIntentClassifier, HybridIntentClassifier
+from .decision_makers import SimpleDecisionMaker, LLMDecisionMaker
+from .classifiers import QueryAnalyzer, create_rule_based_analyzer
 
 __all__ = [
     "create_agent",
@@ -9,5 +11,9 @@ __all__ = [
     "AgentConfig",
     "SimpleAgentOrchestrator",
     "RuleBasedIntentClassifier",
-    "SimpleDecisionMaker"
+    "HybridIntentClassifier",
+    "SimpleDecisionMaker",
+    "LLMDecisionMaker",
+    "QueryAnalyzer",
+    "create_rule_based_analyzer"
 ]

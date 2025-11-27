@@ -5,7 +5,7 @@ Advanced context builder for robust conversation handling.
 
 from typing import Optional
 from app.core.advanced_conversation_memory import ConversationContext, advanced_memory
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 

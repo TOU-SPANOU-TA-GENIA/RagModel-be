@@ -1,49 +1,41 @@
+# app/__init__.py
+"""
+AI Agent RAG Application
+
+A modular AI agent system with RAG capabilities.
+"""
+
 __version__ = "2.0.0"
 __author__ = "Panos Kafantaris"
 
-from .config import (
-    LLM_MODEL_NAME,
-    EMBEDDING_MODEL_NAME,
-    KNOWLEDGE_DIR,
-    INDEX_DIR,
-    SYSTEM_INSTRUCTION,
-    AGENT_MODE,
-    AGENT_USE_CACHE,
-    AGENT_DEBUG_MODE
+# Core exports for convenience
+from app.config import (
+    config,
+    LLM, RAG, AGENT, TOOLS, PATHS,
+    SYSTEM_INSTRUCTION
 )
-
-from .exceptions import (
+from app.core import (
+    Context, Intent, Decision,
     RAGException,
     ChatNotFoundException,
-    VectorStoreNotInitializedException,
-    ModelLoadException,
-    IngestionException
+    startup_manager
 )
-
-# New imports
-from .agent.integration import create_agent, get_agent
-from .core.interfaces import Context, Intent, Decision
+from app.agent.integration import create_agent, get_agent
 
 __all__ = [
     "__version__",
     "__author__",
-    "LLM_MODEL_NAME",
-    "EMBEDDING_MODEL_NAME",
-    "KNOWLEDGE_DIR",
-    "INDEX_DIR",
+    
+    # Config
+    "config",
+    "LLM", "RAG", "AGENT", "TOOLS", "PATHS",
     "SYSTEM_INSTRUCTION",
-    "AGENT_MODE",
-    "AGENT_USE_CACHE",
-    "AGENT_DEBUG_MODE",
-    "RAGException",
-    "ChatNotFoundException",
-    "VectorStoreNotInitializedException",
-    "ModelLoadException",
-    "IngestionException",
-    # New exports
-    "create_agent",
-    "get_agent",
-    "Context",
-    "Intent",
-    "Decision",
+    
+    # Core
+    "Context", "Intent", "Decision",
+    "RAGException", "ChatNotFoundException",
+    "startup_manager",
+    
+    # Agent
+    "create_agent", "get_agent",
 ]

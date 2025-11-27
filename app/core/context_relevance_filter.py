@@ -6,7 +6,7 @@ This prevents context bleeding and ensures appropriate context usage.
 
 from typing import List, Dict, Any, Set
 import re
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 

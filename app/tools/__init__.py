@@ -1,24 +1,34 @@
 # app/tools/__init__.py
-from .base import (
-    BaseTool,
+from .models import (
     ToolResult,
+    BaseTool,
+    SimpleToolRegistry,
+    ToolChain
+)
+from .file_tools import (
     ReadFileTool,
     WriteFileTool,
-    ListFilesTool,
+    ListFilesTool
+)
+from .system_tools import (
     ExecuteCommandTool,
-    SimpleToolRegistry,
+    DatabaseQueryTool
+)
+from .base import (
     create_default_tools,
     create_tool_registry_for_military
 )
 
 __all__ = [
-    "BaseTool",
     "ToolResult",
+    "BaseTool",
+    "SimpleToolRegistry",
+    "ToolChain",
     "ReadFileTool",
     "WriteFileTool",
     "ListFilesTool",
     "ExecuteCommandTool",
-    "SimpleToolRegistry",
+    "DatabaseQueryTool",
     "create_default_tools",
     "create_tool_registry_for_military"
 ]

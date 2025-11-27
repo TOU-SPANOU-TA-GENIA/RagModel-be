@@ -10,8 +10,8 @@ from typing import List, Optional
 from fastapi import UploadFile
 
 from ..config import KNOWLEDGE_DIR, RAG_CONFIG
-from ..exceptions import IngestionException
-from ..logger import setup_logger
+from ..core.exceptions import IngestionException
+from ..utils.logger import setup_logger
 from .retrievers import DocumentProcessor, LocalEmbeddingProvider, Document
 
 logger = setup_logger(__name__)

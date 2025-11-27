@@ -10,7 +10,7 @@ from typing import Optional
 
 from app.llm.fast_providers import FastLocalModelProvider
 from app.config import LLMConfig, LLM_MODEL_NAME
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 

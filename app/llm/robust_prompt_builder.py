@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 from app.core.interfaces import PromptBuilder, Context
 from app.core.advanced_conversation_memory import advanced_memory
 from app.core.advanced_context_builder import advanced_context_builder
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 

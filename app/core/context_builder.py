@@ -5,7 +5,7 @@ Builds comprehensive context from conversation history.
 
 from typing import List, Dict, Any, Optional
 from app.core.conversation_memory import ConversationContext, conversation_memory
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 

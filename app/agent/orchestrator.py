@@ -14,7 +14,7 @@ from app.core.interfaces import (
     LLMProvider, Retriever, PromptBuilder,
     Pipeline, PipelineStep, event_bus
 )
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 from app.llm.response_cleaner import clean_response
 
 logger = setup_logger(__name__)

@@ -1,10 +1,9 @@
 conda activate ragModel_10
 
 # Server Side
-python setup_and_run.py --ingest    # Build vector store
-python setup_and_run.py --run       # Start the server
-python setup_and_run.py --full      # Both
-
+python scripts/run.py --ingest    # Build vector store
+python scripts/run.py --run       # Start the server
+python scripts/run.py --full      # Both
 # Client Side
 python test/chat_cli.py "Πώς κάνω restart το PostgreSQL;" # Simple one-shot query
 python test/chat_cli.py -i # Interactive mode

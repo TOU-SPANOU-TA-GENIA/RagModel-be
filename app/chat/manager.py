@@ -1,21 +1,26 @@
+# app/chat/manager.py
+"""
+Chat session management - handles creating, storing, and retrieving chat sessions.
+"""
+
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 from threading import Lock
 
-from .exceptions import ChatNotFoundException
-from .logger import setup_logger
+from app.core.exceptions import ChatNotFoundException
+from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+# In-memory chat storage
 CHATS: Dict[str, Dict] = {}
-
 _lock = Lock()
 
 
 def create_chat(title: str = "Νέα Συνομιλία") -> str:
+    """Create a new chat session."""
     chat_id = str(uuid.uuid4())
-    
     now = datetime.utcnow().isoformat()
     
     with _lock:
@@ -32,6 +37,7 @@ def create_chat(title: str = "Νέα Συνομιλία") -> str:
 
 
 def list_chats() -> List[Dict]:
+    """List all chat sessions."""
     with _lock:
         chats = [
             {
@@ -43,13 +49,12 @@ def list_chats() -> List[Dict]:
             for c in CHATS.values()
         ]
     
-    # Sort by last updated (newest first)
     chats.sort(key=lambda x: x["last_updated"], reverse=True)
-    
     return chats
 
 
 def get_chat(chat_id: str) -> Dict:
+    """Get a specific chat session."""
     with _lock:
         if chat_id not in CHATS:
             raise ChatNotFoundException(chat_id)
@@ -57,6 +62,7 @@ def get_chat(chat_id: str) -> Dict:
 
 
 def append_message(chat_id: str, role: str, content: str) -> Dict:
+    """Add a message to a chat session."""
     if chat_id not in CHATS:
         raise ChatNotFoundException(chat_id)
     
@@ -73,11 +79,11 @@ def append_message(chat_id: str, role: str, content: str) -> Dict:
         CHATS[chat_id]["updated"] = now
     
     logger.debug(f"Appended {role} message to chat {chat_id}")
-    
     return message
 
 
 def get_history(chat_id: str) -> List[Dict]:
+    """Get message history for a chat."""
     if chat_id not in CHATS:
         raise ChatNotFoundException(chat_id)
     
@@ -86,6 +92,7 @@ def get_history(chat_id: str) -> List[Dict]:
 
 
 def update_chat_title(chat_id: str, title: str) -> None:
+    """Update a chat's title."""
     if chat_id not in CHATS:
         raise ChatNotFoundException(chat_id)
     
@@ -97,6 +104,7 @@ def update_chat_title(chat_id: str, title: str) -> None:
 
 
 def delete_chat(chat_id: str) -> None:
+    """Delete a chat session."""
     if chat_id not in CHATS:
         raise ChatNotFoundException(chat_id)
     
@@ -107,6 +115,7 @@ def delete_chat(chat_id: str) -> None:
 
 
 def clear_all_chats() -> int:
+    """Clear all chat sessions."""
     with _lock:
         count = len(CHATS)
         CHATS.clear()
@@ -116,6 +125,7 @@ def clear_all_chats() -> int:
 
 
 def get_stats() -> Dict:
+    """Get chat statistics."""
     with _lock:
         total_chats = len(CHATS)
         total_messages = sum(len(c["messages"]) for c in CHATS.values())

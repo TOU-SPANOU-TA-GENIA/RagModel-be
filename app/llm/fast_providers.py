@@ -9,7 +9,7 @@ from typing import Dict, Any
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 from app.core.interfaces import LLMProvider
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 from app.config import LLMConfig, FAST_LLM_CONFIG
 
 logger = setup_logger(__name__)

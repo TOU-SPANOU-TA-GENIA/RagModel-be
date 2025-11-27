@@ -8,7 +8,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from app.tools.base import BaseTool, ToolResult
-from app.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
