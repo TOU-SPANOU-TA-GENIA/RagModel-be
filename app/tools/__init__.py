@@ -16,7 +16,7 @@ from .system_tools import (
 )
 from .base import (
     create_default_tools,
-    create_tool_registry_for_military
+    create_restricted_tool_registry
 )
 
 __all__ = [
@@ -30,5 +30,5 @@ __all__ = [
     "ExecuteCommandTool",
     "DatabaseQueryTool",
     "create_default_tools",
-    "create_tool_registry_for_military"
+    "create_restricted_tool_registry"
 ]

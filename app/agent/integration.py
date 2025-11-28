@@ -28,7 +28,7 @@ from app.rag.retrievers import (
 )
 from app.tools.base import (
     create_default_tools,
-    create_tool_registry_for_military,
+    create_restricted_tool_registry,
     ReadFileTool,
     SimpleToolRegistry
 )
@@ -193,7 +193,7 @@ class AgentBuilder:
             self.tool_registry = SimpleToolRegistry()
         elif self.config.tool_config == "military":
             logger.info("Creating military tool registry")
-            self.tool_registry = create_tool_registry_for_military()
+            self.tool_registry = create_restricted_tool_registry()
         elif self.config.tool_config == "custom":
             logger.info("Creating custom tool registry")
             self.tool_registry = self._build_custom_tools()
@@ -308,7 +308,7 @@ def create_agent(
         if mode == "development":
             config = AgentConfig.for_development()
         elif mode == "military":
-            config = AgentConfig.for_military()
+            config = AgentConfig.for_restricted_deployment()
         else:
             config = AgentConfig.for_production()
     

@@ -36,7 +36,7 @@ __all__ = [
     "ExecuteCommandTool",
     "DatabaseQueryTool",
     "create_default_tools",
-    "create_tool_registry_for_military"
+    "create_restricted_tool_registry"
 ]
 
 
@@ -73,19 +73,19 @@ def create_default_tools() -> SimpleToolRegistry:
     return registry
 
 
-def create_tool_registry_for_military() -> SimpleToolRegistry:
+def create_restricted_tool_registry() -> SimpleToolRegistry:
     """Create registry for military environment."""
     registry = SimpleToolRegistry()
     
-    military_dirs = [KNOWLEDGE_DIR, DATA_DIR, BASE_DIR / "logs"]
+    restricted_dirs = [KNOWLEDGE_DIR, DATA_DIR, BASE_DIR / "logs"]
     
     try:
         from app.tools.enhanced_file_tools import create_enhanced_file_tools
-        enhanced_tools = create_enhanced_file_tools(military_dirs)
+        enhanced_tools = create_enhanced_file_tools(restricted_dirs)
         for tool in enhanced_tools.values():
             registry.register(tool)
     except ImportError:
-        registry.register(ReadFileTool(allowed_dirs=military_dirs))
+        registry.register(ReadFileTool(allowed_dirs=restricted_dirs))
     
     registry.register(WriteFileTool(allowed_dirs=[Path("/data/outputs")]))
     
