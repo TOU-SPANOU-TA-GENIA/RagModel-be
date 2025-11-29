@@ -13,7 +13,7 @@ import json
 @dataclass
 class PersonaConfig:
     """AI persona configuration."""
-    name: str = "Panos"
+    name: str = ""
     description: str = "A helpful AI assistant"
     age: Optional[int] = 28
     role: str = "AI Assistant"
@@ -224,7 +224,7 @@ class InstructionsSettings:
     Simplified instructions settings for config system compatibility.
     This is what gets loaded from config.json.
     """
-    persona_name: str = "Panos"
+    persona_name: str = ""
     persona_description: str = "A helpful AI assistant"
     
     @classmethod

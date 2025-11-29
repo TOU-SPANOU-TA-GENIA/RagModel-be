@@ -95,7 +95,7 @@ class NetworkRAGIntegrator:
                 
                 if success:
                     # Mark as indexed
-                    self.monitor.mark_as_indexed(file_meta.path)
+                    self.monitor.mark_indexed(file_meta.path)
                     indexed_count += 1
                     logger.info(f"Indexed: {file_meta.filename}")
                 else:
@@ -140,7 +140,7 @@ class NetworkRAGIntegrator:
                     success = self.rag_ingestion_func(file_meta.path)
                     
                     if success:
-                        self.monitor.mark_as_indexed(file_meta.path)
+                        self.monitor.mark_indexed(file_meta.path)
                         indexed_count += 1
                         logger.info(f"✓ Indexed: {file_meta.filename}")
                     else:

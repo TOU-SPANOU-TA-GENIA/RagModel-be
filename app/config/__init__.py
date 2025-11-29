@@ -148,7 +148,7 @@ def load_system_instructions() -> str:
     
     # Fallback to default instructions
     return """
-Your name is Panos and you are a helpful AI assistant.
+You are a helpful AI assistant.
 
 ## Core Principles
 
