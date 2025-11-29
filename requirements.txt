@@ -1,3 +1,11 @@
+# Authentication & Database
+passlib==1.7.4
+redis==5.0.1
+bcrypt==4.0.1
+python-jose[cryptography]==3.3.0
+email-validator
+
+# dependencies
 fastapi
 uvicorn[standard]
 pydantic

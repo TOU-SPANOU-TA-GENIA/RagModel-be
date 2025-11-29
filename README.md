@@ -1,45 +1,17 @@
-# AI Agent RAG System
+# RagModel-be
 
-A modular AI agent with Retrieval-Augmented Generation (RAG) capabilities, designed for offline deployment.
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Running the System](#running-the-system)
-- [Testing](#testing)
-- [Examples](#examples)
-- [Troubleshooting](#troubleshooting)
+AI Agent with RAG capabilities, user authentication, and persistent chat storage.
 
 ---
 
-## Quick Start
+## Features
 
-```bash
-# 1. setup
-cd ragmodel-be
-
-# 2. Create virtual environment
-conda create -n ragmodel_10 python=3.10
-conda activate ragmodel_10
-
-# 3. Install dependencies
-pip install -r requirements.txt
-pip install pytest
-
-# 4. Download models (requires internet)
-python scripts/download_models.py
-
-# 5. Add documents to knowledge base
-cp your_documents/*.txt data/knowledge/
-
-# 6. Start the system
-python scripts/run.py --full
-
-# 7. Test it
-python tests/cli/chat_client.py "Hello, what can you do?"
-```
+- 🤖 **AI Agent** with GPT-style conversations
+- 📚 **RAG** - Answer questions based on your documents
+- 🔐 **Authentication** - User accounts with JWT tokens
+- 💬 **Persistent Chats** - All conversations saved to database
+- ⚡ **Fast** - GPU acceleration + Redis caching
+- 🛠️ **Tools** - File operations, document generation
 
 ---
 
@@ -48,14 +20,16 @@ python tests/cli/chat_client.py "Hello, what can you do?"
 ### Prerequisites
 
 - Python 3.10+
-- CUDA 11.8+ (for GPU acceleration)
-- 8GB+ RAM (16GB recommended)
-- 6GB+ GPU VRAM (for local LLM)
+- CUDA 11.8+ (for GPU)
+- 8GB RAM minimum
 
-### Step 1: Environment Setup
+### Step 1: Clone & Setup
 
-**Using Conda (recommended):**
 ```bash
+git clone <your-repo>
+cd RagModel-be
+
+# Create environment
 conda create -n ragmodel_10 python=3.10
 conda activate ragmodel_10
 ```
@@ -63,39 +37,294 @@ conda activate ragmodel_10
 ### Step 2: Install Dependencies
 
 ```bash
-# Core dependencies
+# Core packages
 pip install -r requirements.txt
-
-# For GPU support (if not already installed)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### Step 3: Download Models
+### Step 3: Install Redis
 
-Models must be downloaded before first use:
+**WSL:**
+```bash
+sudo apt update
+sudo apt install redis-server
+sudo systemctl start redis
+```
+
+**Verify:**
+```bash
+redis-cli ping  # Should respond: PONG
+```
+
+### Step 4: Initialize Database
 
 ```bash
-# Download default models from config
+python scripts/setup_auth.py
+```
+
+This creates:
+- SQLite database at `data/app.db`
+- Test user (username: `testuser`, password: `testpass123`)
+
+---
+
+## Setup
+
+### 1. Download AI Models
+
+```bash
 python scripts/download_models.py
-
-# Or specify custom models
-python scripts/download_models.py --llm "meta-llama/Llama-3.2-1B-Instruct"
 ```
 
-### Step 4: Verify Installation
+This downloads:
+- LLM model (3GB)
+- Embedding model (500MB)
+
+### 2. Add Your Documents
 
 ```bash
-# Run basic test
-python -m pytest tests/unit/test_config.py -v
+# Copy your files to knowledge directory
+cp your_files/*.txt data/knowledge/
+cp your_files/*.pdf data/knowledge/
+```
+
+### 3. Start the Server
+
+```bash
+python scripts/run.py --full
+```
+
+This will:
+- Ingest your documents
+- Start the API server at http://localhost:8000
+
+**Server is ready when you see:**
+```
+✅ Application ready
+INFO: Uvicorn running on http://localhost:8000
+```
+
+---
+
+## Usage
+
+### Option 1: Interactive CLI (Recommended)
+
+```bash
+python tests/cli/authenticated_chat_client.py
+```
+
+**Example session:**
+```
+[guest] > login
+Username: testuser
+Password: testpass123
+✅ Login successful!
+
+[testuser] > new "My First Chat"
+✅ Created new chat: 'My First Chat'
+
+[testuser@My First Chat] > hello, how are you?
+🤔 Thinking...
+🤖 Assistant: I'm doing well! How can I help you today?
+
+[testuser@My First Chat] > list
+💬 Your Chats
+→ 1. My First Chat | Messages: 2
+
+[testuser@My First Chat] > exit
+```
+
+**Available commands:**
+- `register` - Create new account
+- `login` - Login
+- `new <title>` - Create chat
+- `list` - List all chats
+- `select <#>` - Switch chat
+- `history` - View messages
+- `<message>` - Send message
+- `exit` - Quit
+
+### Option 2: API (Python)
+
+```python
+import requests
+
+BASE_URL = "http://localhost:8000"
+
+# 1. Register
+response = requests.post(f"{BASE_URL}/auth/register", json={
+    "username": "alice",
+    "email": "alice@example.com",
+    "password": "secret123"
+})
+
+# 2. Login
+response = requests.post(f"{BASE_URL}/auth/login", json={
+    "username": "alice",
+    "password": "secret123"
+})
+token = response.json()["access_token"]
+
+# 3. Create chat
+headers = {"Authorization": f"Bearer {token}"}
+response = requests.post(
+    f"{BASE_URL}/chats/",
+    headers=headers,
+    json={"title": "Python Help"}
+)
+chat_id = response.json()["id"]
+
+# 4. Send message
+response = requests.post(
+    f"{BASE_URL}/chats/{chat_id}/messages",
+    headers=headers,
+    json={"content": "Explain Python decorators"}
+)
+print(response.json()["answer"])
+
+# 5. List all chats
+response = requests.get(f"{BASE_URL}/chats/", headers=headers)
+chats = response.json()
+for chat in chats:
+    print(f"{chat['title']}: {chat['message_count']} messages")
+```
+
+### Option 3: REST API
+
+**Interactive docs:** http://localhost:8000/docs
+
+**Example requests:**
+
+```bash
+# Register
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"bob","email":"bob@example.com","password":"pass123"}'
+
+# Login
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"bob","password":"pass123"}'
+# Returns: {"access_token": "eyJ...", "user": {...}}
+
+# Create chat
+curl -X POST http://localhost:8000/chats/ \
+  -H "Authorization: Bearer <your_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"AI Discussion"}'
+
+# Send message
+curl -X POST http://localhost:8000/chats/<chat_id>/messages \
+  -H "Authorization: Bearer <your_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"What is machine learning?"}'
+```
+
+---
+
+## Testing
+
+### 1. Test Authentication
+
+```bash
+python tests/cli/authenticated_chat_client.py
+```
+
+Try:
+- Register a new account
+- Login
+- Create a chat
+- Send messages
+- List chats
+- View history
+
+### 2. Test API Endpoints
+
+```bash
+# Start server
+python scripts/run.py --run
+
+# In another terminal, test endpoints
+curl http://localhost:8000/health
+curl http://localhost:8000/
+```
+
+### 3. Run Unit Tests
+
+```bash
+pytest tests/unit/ -v
+```
+
+### 4. Database Inspection
+
+**SQLite (view users, chats, messages):**
+```bash
+python scripts/inspect_sqlite.py
+```
+
+**Redis (view cached data):**
+```bash
+python scripts/inspect_redis.py
+```
+
+**Or use GUI tools:**
+- SQLite: Download [DB Browser](https://sqlitebrowser.org/) → Open `data/app.db`
+- Redis: Download [RedisInsight](https://redis.com/redis-enterprise/redis-insight/) → Connect to `localhost:6379`
+
+### 5. Quick Functionality Test
+
+```python
+# test_basic.py
+import requests
+
+def test_full_flow():
+    base = "http://localhost:8000"
+    
+    # Register
+    r = requests.post(f"{base}/auth/register", json={
+        "username": "test123",
+        "email": "test@test.com",
+        "password": "pass123"
+    })
+    assert r.status_code == 201
+    
+    # Login
+    r = requests.post(f"{base}/auth/login", json={
+        "username": "test123",
+        "password": "pass123"
+    })
+    token = r.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # Create chat
+    r = requests.post(f"{base}/chats/", headers=headers, json={"title": "Test"})
+    chat_id = r.json()["id"]
+    
+    # Send message
+    r = requests.post(
+        f"{base}/chats/{chat_id}/messages",
+        headers=headers,
+        json={"content": "Hello"}
+    )
+    assert r.status_code == 200
+    assert "answer" in r.json()
+    
+    print("✅ All tests passed!")
+
+if __name__ == "__main__":
+    test_full_flow()
+```
+
+Run it:
+```bash
+python test_basic.py
 ```
 
 ---
 
 ## Configuration
 
-Configuration is managed through `config.json`. You can modify settings via:
-
-### 1. Edit config.json directly
+Edit `config.json` to change settings:
 
 ```json
 {
@@ -111,247 +340,123 @@ Configuration is managed through `config.json`. You can modify settings via:
 }
 ```
 
-### 3. Use environment variables
-
-```bash
-export AGENT_MODE=development
-export AGENT_DEBUG=true
-```
-
-### Key Configuration Options
-
-| Category | Setting | Default | Description |
-|----------|---------|---------|-------------|
-| llm | model_name | Llama-3.2-3B | LLM model to use |
-| llm | temperature | 0.7 | Response creativity (0-2) |
-| llm | max_new_tokens | 2048 | Max response length |
-| llm | quantization | 4bit | Model quantization |
-| rag | top_k | 3 | Number of documents to retrieve |
-| rag | chunk_size | 500 | Document chunk size |
-| agent | mode | production | Agent mode |
-| agent | debug_mode | false | Enable debug output |
-
----
-
-## Running the System
-
-### Development Mode
-
-```bash
-# Full setup: ingest documents + start server
-python scripts/run.py --full
-
-# Or step by step:
-python scripts/run.py --ingest   # Build knowledge base
-python scripts/run.py --run      # Start server
-```
-
-### Production Mode
-
-```bash
-# With custom host/port
-python scripts/run.py --run --host 0.0.0.0 --port 8080
-```
-
-
-## Testing
-
-### Run All Tests
-
-```bash
-# All tests
-pytest
-
-# With coverage
-pytest --cov=app --cov-report=html
-
-# Verbose output
-pytest -v
-```
-
-### Run Specific Test Categories
-
-```bash
-# Unit tests only
-pytest tests/unit/ -v
-
-# Integration tests
-pytest tests/integration/ -v
-
-# End-to-end tests
-pytest tests/e2e/ -v
-
-# Skip GPU tests
-pytest -m "not gpu"
-```
-
-### Interactive Testing
-
-```bash
-# CLI chat client
-python tests/cli/chat_client.py
-
-# Single query
-python tests/cli/chat_client.py "What is Python?"
-
-# Interactive mode
-python tests/cli/chat_client.py -i
-```
-
-### Test Configuration
-
-```bash
-# Test with mock LLM (no GPU needed)
-AGENT_MODE=development pytest tests/unit/
-
-# Test specific component
-pytest tests/unit/test_agent.py::TestIntentClassifier -v
-```
-
-## Examples
-
-### Example 1: Simple Q&A
-
-```python
-import requests
-
-response = requests.post(
-    "http://localhost:8000/chat",
-    json={"role": "user", "content": "What is machine learning?"}
-)
-
-print(response.json()["answer"])
-```
-
-### Example 2: File Operations
-
-```python
-# Ask to read a file
-response = requests.post(
-    "http://localhost:8000/chat",
-    json={"role": "user", "content": "Read the file config.txt"}
-)
-
-print(response.json()["answer"])
-```
-
-### Example 3: Document Generation
-
-```python
-# Create a document
-response = requests.post(
-    "http://localhost:8000/chat",
-    json={
-        "role": "user",
-        "content": "Create a Word document about Python basics"
-    }
-)
-
-# Download the created document
-print(response.json()["tool_result"])
-```
-
-### Example 4: Conversation with Memory
-
-```python
-import requests
-
-session_id = None
-
-# First message
-r1 = requests.post(
-    "http://localhost:8000/chat",
-    json={"role": "user", "content": "My name is Alice"}
-)
-session_id = r1.json()["session_id"]
-
-# Second message (remembers context)
-r2 = requests.post(
-    "http://localhost:8000/chat",
-    params={"session_id": session_id},
-    json={"role": "user", "content": "What is my name?"}
-)
-
-print(r2.json()["answer"])  # Should mention "Alice"
-```
-
-### Example 5: Custom Instructions
-
-```python
-# Set a custom instruction
-r1 = requests.post(
-    "http://localhost:8000/chat",
-    json={
-        "role": "user",
-        "content": "When I say 'weather', respond with 'Check the sky!'"
-    }
-)
-session_id = r1.json()["session_id"]
-
-# Test the instruction
-r2 = requests.post(
-    "http://localhost:8000/chat",
-    params={"session_id": session_id},
-    json={"role": "user", "content": "weather"}
-)
-
-print(r2.json()["answer"])  # Should say "Check the sky!"
-```
+**Common changes:**
+- Use smaller model: Change `model_name` to `"meta-llama/Llama-3.2-1B-Instruct"`
+- Adjust response length: Change `max_new_tokens`
+- More context: Increase `top_k` (more documents retrieved)
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-**1. CUDA not available**
+### Redis not available
+```
+⚠️ Redis is not available
+```
+**Fix:**
 ```bash
-# Check CUDA installation
-nvidia-smi
-python -c "import torch; print(torch.cuda.is_available())"
-
-# Install correct PyTorch version
-pip install torch --index-url https://download.pytorch.org/whl/cu118
+sudo systemctl start redis  # Linux
+brew services start redis   # macOS
 ```
 
-**2. Out of memory**
+### CUDA out of memory
+```
+RuntimeError: CUDA out of memory
+```
+**Fix:** Use smaller model
 ```bash
-# Use smaller model
 python scripts/download_models.py --llm "meta-llama/Llama-3.2-1B-Instruct"
-
-# Or increase quantization
-# In config.json: "quantization": "8bit"
 ```
 
-**3. Model not found**
+### Token expired
+```
+401 Unauthorized: Invalid token
+```
+**Fix:** Login again to get a new token (tokens expire after 24 hours)
+
+### Port already in use
+```
+Address already in use
+```
+**Fix:**
 ```bash
-# Re-download models
+lsof -i :8000  # Find process
+kill -9 <PID>  # Kill it
+```
+
+### Can't find models
+```
+OSError: Model not found
+```
+**Fix:**
+```bash
 python scripts/download_models.py --force
-
-# Check model path in config
-cat config.json | grep model_name
 ```
-
-**4. Server won't start**
-```bash
-# Check port availability
-lsof -i :8000
-
-# Check logs
-python scripts/run.py --run 2>&1 | tee server.log
-```
-
-**5. Slow responses**
-- Enable GPU acceleration
-- Use 4-bit quantization
-- Reduce max_new_tokens
-- Pre-warm LLM (enabled by default)
-
-### Getting Help
-
-1. Check server health: `curl http://localhost:8000/health`
-2. Check startup status: `curl http://localhost:8000/startup-status`
-3. Enable debug mode: Set `AGENT_DEBUG=true`
-4. Check logs in console output
 
 ---
+
+## Quick Reference
+
+### File Structure
+```
+RagModel-be/
+├── data/
+│   ├── knowledge/      # Your documents (add files here)
+│   └── app.db         # SQLite database
+├── config.json        # Configuration
+├── scripts/
+│   ├── setup_auth.py  # Initialize database
+│   └── run.py         # Start server
+└── tests/cli/
+    └── authenticated_chat_client.py  # Interactive CLI
+```
+
+### Common Commands
+```bash
+# Start everything
+python scripts/run.py --full
+
+# Just start server
+python scripts/run.py --run
+
+# Initialize database
+python scripts/setup_auth.py
+
+# Interactive chat
+python tests/cli/authenticated_chat_client.py
+
+# View database
+python scripts/inspect_sqlite.py
+
+# View cache
+python scripts/inspect_redis.py
+
+# Run tests
+pytest tests/unit/
+```
+
+### API Endpoints
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/auth/register` | POST | No | Register user |
+| `/auth/login` | POST | No | Get token |
+| `/chats/` | POST | Yes | Create chat |
+| `/chats/` | GET | Yes | List chats |
+| `/chats/{id}/messages` | POST | Yes | Send message |
+| `/health` | GET | No | Health check |
+| `/docs` | GET | No | API docs |
+
+---
+
+## Support
+
+- **API Docs:** http://localhost:8000/docs
+- **Health Check:** http://localhost:8000/health
+- **View Logs:** Check console output when running server
+
+---
+
+**That's it! You're ready to use the AI agent.** 🚀
+
+Start with: `python scripts/run.py --full` then `python tests/cli/authenticated_chat_client.py`

@@ -1,6 +1,7 @@
 # app/llm/intelligent_prompt_builder.py
 """
 Intelligent prompt builder with context relevance filtering.
+FIXED: Now uses chat_history from Context (database messages) instead of separate session memory.
 """
 
 from typing import Dict, Any, Optional, List
@@ -24,30 +25,49 @@ class IntelligentPromptBuilder(PromptBuilder):
         self.tools = tools or {}
     
     def build(self, context: Context, **kwargs) -> str:
-        session_id = context.metadata.get("session_id")
-        session = conversation_memory.get_or_create_session(session_id)
+        # FIXED: Use chat_history from context (from database) instead of separate session
+        chat_history = context.chat_history or []
         
-        filtered = context_filter.filter_context(
-            query=context.query,
-            messages=session.messages,
-            user_facts=session.metadata.get("user_facts", {}),
-            instructions=session.user_instructions
-        )
+        # For backward compatibility, also check session memory
+        # but prioritize chat_history from context (database messages)
+        session_id = context.metadata.get("session_id")
+        session = conversation_memory.get_or_create_session(session_id) if session_id else None
+        
+        # Use database chat_history if available, otherwise fall back to session
+        if chat_history:
+            messages_to_use = chat_history
+            logger.info(f"🔍 Using {len(chat_history)} messages from database chat_history")
+        elif session:
+            messages_to_use = session.messages
+            logger.info(f"⚠️ Fallback: Using {len(session.messages)} messages from session memory")
+        else:
+            messages_to_use = []
+            logger.info("❌ No history available")
+        
+        # BYPASS aggressive context_filter - it filters out ALL messages
+        # Instead, just use all messages directly
+        filtered = {
+            "query_type": "conversational",
+            "should_use_history": len(messages_to_use) > 0,
+            "relevant_messages": messages_to_use,  # Use ALL messages, don't filter
+            "active_instructions": [],
+            "relevant_facts": {}
+        }
         
         sections = self._build_sections(context, filtered, **kwargs)
         full_prompt = "\n\n".join(sections)
         
-        context.metadata["session_id"] = session.session_id
+        if session:
+            context.metadata["session_id"] = session.session_id
         
-        logger.debug(f"Built prompt - Query type: {filtered['query_type']}, "
-                    f"History: {len(filtered['relevant_messages'])}")
+        logger.info(f"✅ Built prompt with {len(filtered['relevant_messages'])} messages in history")
         
         return full_prompt
     
     def _build_sections(self, context: Context, filtered: Dict, **kwargs) -> List[str]:
         sections = []
         
-        sections.append(f"<system>\n{self.system_instruction}\n</system>")
+        sections.append(f"<s>\n{self.system_instruction}\n</s>")
         
         if filtered["active_instructions"]:
             instructions_text = self._format_instructions(filtered["active_instructions"])
@@ -75,20 +95,11 @@ class IntelligentPromptBuilder(PromptBuilder):
         
         return sections
     
-    def _format_instructions(self, instructions: Dict[str, Any]) -> str:
-        lines = []
-        for key, instruction in instructions.items():
-            if isinstance(instruction, dict):
-                desc = instruction.get('description', '')
-                if desc:
-                    lines.append(f"- {desc}")
-            elif isinstance(instruction, str):
-                lines.append(f"- {instruction}")
-        return "\n".join(lines) if lines else "No active instructions"
+    def _format_instructions(self, instructions: List[str]) -> str:
+        return "\n".join(f"- {inst}" for inst in instructions)
     
     def _format_facts(self, facts: Dict[str, Any]) -> str:
-        lines = [f"- {key}: {value}" for key, value in facts.items()]
-        return "\n".join(lines) if lines else "No user information"
+        return "\n".join(f"- {k}: {v}" for k, v in facts.items())
     
     def _format_history(self, messages: List[Dict[str, str]]) -> str:
         lines = []
@@ -96,4 +107,4 @@ class IntelligentPromptBuilder(PromptBuilder):
             role = msg.get("role", "user").capitalize()
             content = msg.get("content", "")
             lines.append(f"{role}: {content}")
-        return "\n".join(lines) if lines else "No conversation history"
+        return "\n".join(lines)

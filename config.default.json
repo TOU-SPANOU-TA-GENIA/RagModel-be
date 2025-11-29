@@ -30,7 +30,7 @@
   },
   "agent": {
     "mode": "production",
-    "debug_mode": false,
+    "debug_mode": true,
     "use_cache": false,
     "max_tool_retries": 2,
     "tool_timeout": 30.0,
