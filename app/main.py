@@ -1,6 +1,6 @@
 # app/main.py
 """
-FastAPI application entry point with authentication.
+FastAPI application entry point with authentication and network filesystem support.
 Integrates all routes, middleware, and lifecycle management.
 """
 
@@ -28,7 +28,7 @@ from app.api import (
 # Import configuration
 from app.config import (
     SERVER, PATHS, AGENT,
-    SYSTEM_INSTRUCTION
+    SYSTEM_INSTRUCTION, config
 )
 
 # Import core modules
@@ -63,6 +63,71 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing database...")
         init_database()
         
+        # ========== NETWORK FILESYSTEM INITIALIZATION ==========
+        logger.info("Initializing network filesystem...")
+        try:
+            from app.core.network_filesystem import initialize_network_monitor, NetworkShare
+            from app.core.network_rag_integration import initialize_network_rag
+            from app.rag.ingestion import ingest_file
+            from pathlib import Path
+            
+            # Get network filesystem configuration
+            network_config = config.get_section('network_filesystem')
+            
+            if network_config and network_config.get('enabled'):
+                shares = []
+                
+                # Parse shares from config
+                for share_data in network_config.get('shares', []):
+                    if share_data.get('enabled'):
+                        share = NetworkShare(
+                            name=share_data['name'],
+                            mount_path=Path(share_data['mount_path']),
+                            share_type=share_data.get('share_type', 'smb'),
+                            enabled=True,
+                            auto_index=share_data.get('auto_index', True),
+                            watch_for_changes=share_data.get('watch_for_changes', True),
+                            scan_interval=share_data.get('scan_interval', 300),
+                            include_extensions=share_data.get('include_extensions', []),
+                            exclude_patterns=share_data.get('exclude_patterns', []),
+                            max_file_size_mb=share_data.get('max_file_size_mb', 100)
+                        )
+                        shares.append(share)
+                        logger.info(f"  📁 Configured share: {share.name} at {share.mount_path}")
+                
+                if shares:
+                    # Initialize monitoring
+                    monitor = initialize_network_monitor(shares)
+                    logger.info(f"✅ Network monitoring initialized for {len(shares)} shares")
+                    
+                    # Initialize RAG integration
+                    if network_config.get('auto_start_monitoring', True):
+                        integrator = initialize_network_rag(monitor, ingest_file)
+                        integrator.start()
+                        logger.info("✅ Network-RAG integration started")
+                        
+                        # Trigger initial scan
+                        logger.info("🔍 Starting initial file discovery...")
+                        monitor.scan_all_shares()
+                        stats = monitor.get_stats()
+                        logger.info(f"📊 Discovery complete: {stats['total_files']} files found")
+                        
+                        # Show files by share
+                        for share_name, count in stats['by_share'].items():
+                            logger.info(f"   - {share_name}: {count} files")
+                    else:
+                        logger.info("Auto-start monitoring disabled")
+                else:
+                    logger.warning("No enabled network shares configured")
+            else:
+                logger.info("Network filesystem disabled in configuration")
+        
+        except Exception as e:
+            logger.error(f"Network filesystem initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+        # ========== END NETWORK FILESYSTEM INITIALIZATION ==========
+        
         # Initialize system (RAG, models, etc.)
         logger.info("Initializing system components...")
         await startup_manager.initialize_system()
@@ -81,11 +146,23 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     try:
+        # Stop network monitoring
+        logger.info("Stopping network monitoring...")
+        try:
+            from app.core.network_rag_integration import get_network_integrator
+            integrator = get_network_integrator()
+            if integrator:
+                integrator.stop()
+                logger.info("Network monitoring stopped")
+        except Exception as e:
+            logger.error(f"Error stopping network monitoring: {e}")
+        
+        # Save configuration
         from app.config import config_manager
         config_manager.save()
         logger.info("Configuration saved")
     except Exception as e:
-        logger.warning(f"Config save failed: {e}")
+        logger.warning(f"Shutdown cleanup failed: {e}")
     
     logger.info("🛑 Shutting down...")
 
@@ -166,7 +243,8 @@ async def root():
             "authentication": True,
             "chat_persistence": True,
             "rag": True,
-            "file_operations": True
+            "file_operations": True,
+            "network_filesystem": True
         },
         "endpoints": {
             "auth": "/auth",
@@ -207,6 +285,23 @@ async def health_check():
         health_status["services"]["database_status"] = f"error: {str(e)}"
         health_status["status"] = "degraded"
     
+    # Check network filesystem status
+    try:
+        from app.core.network_rag_integration import get_network_integrator
+        integrator = get_network_integrator()
+        if integrator:
+            nfs_status = integrator.get_status()
+            health_status["services"]["network_filesystem"] = {
+                "enabled": True,
+                "total_files": nfs_status.get("total_network_files", 0),
+                "indexed_files": nfs_status.get("indexed_files", 0),
+                "pending_files": nfs_status.get("pending_files", 0)
+            }
+        else:
+            health_status["services"]["network_filesystem"] = {"enabled": False}
+    except Exception as e:
+        health_status["services"]["network_filesystem"] = {"enabled": False, "error": str(e)}
+    
     return health_status
 
 
@@ -234,291 +329,55 @@ async def get_startup_status():
 @app.get("/stats", response_model=StatsResponse)
 async def get_stats():
     """Get system statistics."""
+    from pathlib import Path
+    
+    stats = {
+        "uptime_seconds": None,
+        "total_chats": 0,
+        "total_messages": 0,
+        "storage": {
+            "database": "sqlite",
+            "cache": "redis" if storage.redis_available else "none"
+        }
+    }
+    
+    # Get startup time
+    if startup_manager.start_time:
+        import time
+        stats["uptime_seconds"] = int(time.time() - startup_manager.start_time)
+    
+    # Get chat/message counts from database
     try:
-        # Get database stats
         import sqlite3
-        from pathlib import Path
         db_path = Path(PATHS.data_dir) / "app.db"
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Count users
-        cursor.execute("SELECT COUNT(*) FROM users")
-        user_count = cursor.fetchone()[0]
-        
         # Count chats
         cursor.execute("SELECT COUNT(*) FROM chats")
-        chat_count = cursor.fetchone()[0]
+        stats["total_chats"] = cursor.fetchone()[0]
         
         # Count messages
         cursor.execute("SELECT COUNT(*) FROM messages")
-        message_count = cursor.fetchone()[0]
+        stats["total_messages"] = cursor.fetchone()[0]
         
         conn.close()
-        
-        # Redis stats
-        redis_stats = {}
-        if storage.redis_available:
-            redis_stats = {
-                "cache_enabled": True,
-                "cached_keys": len(storage.redis.keys("*")) if storage.redis else 0
-            }
-        else:
-            redis_stats = {"cache_enabled": False}
-        
-        return {
-            "users": user_count,
-            "chats": chat_count,
-            "messages": message_count,
-            "uptime_seconds": 0,  # TODO: Track actual uptime
-            "redis": redis_stats,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    
     except Exception as e:
-        logger.error(f"Failed to get stats: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve statistics"
-        )
-
-
-# =============================================================================
-# Legacy/Public Endpoints (for backward compatibility)
-# =============================================================================
-
-@app.post("/chat")
-async def simple_chat_endpoint(msg: MessageRequest):
-    """
-    Simple chat endpoint (no authentication required).
-    For testing and backward compatibility.
+        logger.error(f"Error getting stats: {e}")
     
-    Note: This endpoint does not persist conversations.
-    For persistent chats, use the authenticated /chats endpoints.
-    """
-    from app.agent.integration import get_agent
-    from app.core.conversation_memory import conversation_memory
-    import uuid
-    
-    # Create temporary session
-    session_id = str(uuid.uuid4())
-    session = conversation_memory.get_or_create_session(session_id)
-    session.add_message("user", msg.content)
-    history = session.get_recent_messages(max_messages=10)[:-1]
-    
-    agent = get_agent()
-    response = agent.process_query(
-        query=msg.content,
-        chat_history=history,
-        metadata={"session_id": session_id}
-    )
-    
-    # Build response
-    source_docs = [
-        SourceDocument(
-            content=src.get("content", ""),
-            source=src.get("metadata", {}).get("source", "Unknown"),
-            relevance_score=src.get("score", 0.0)
-        )
-        for src in response.sources
-    ]
-    
-    return AgentResponse(
-        answer=response.answer,
-        sources=source_docs,
-        tool_used=response.tool_used,
-        tool_result=response.tool_result,
-        intent=response.intent,
-        debug_info=response.debug_info if AGENT.debug_mode else [],
-        execution_time=response.execution_time,
-        internal_thinking=response.internal_thinking,
-        session_id=session_id
-    )
-
-
-@app.post("/query")
-async def legacy_query(query: str):
-    """
-    Legacy query endpoint (deprecated - use authenticated /chats endpoints instead).
-    Kept for backward compatibility.
-    """
-    from app.agent.integration import get_agent
-    
-    agent = get_agent()
-    response = agent.process_query(query)
-    
-    return {
-        "answer": response.answer,
-        "sources": response.sources,
-        "deprecated": True,
-        "message": "This endpoint is deprecated. Please use /auth/login and /chats endpoints."
-    }
-
-
-# =============================================================================
-# File Upload Endpoints (can be restricted to authenticated users if needed)
-# =============================================================================
-
-@app.post("/upload", response_model=UploadResponse)
-async def upload_file(file: UploadFile = File(...)):
-    """Upload a document to the knowledge base."""
-    from app.rag.ingestion import save_upload
-    
+    # Get network filesystem stats
     try:
-        await save_upload(file)
-        return UploadResponse(
-            filename=file.filename,
-            status="uploaded",
-            message=f"File uploaded. Call /ingest/file/{file.filename} to index it."
-        )
-    except Exception as e:
-        logger.error(f"Upload failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed: {str(e)}"
-        )
-
-
-@app.post("/ingest/file/{filename}", response_model=IngestionResponse)
-async def ingest_file(filename: str):
-    """Ingest a single uploaded file into the RAG system."""
-    from app.rag.ingestion import ingest_single_file
-    from pathlib import Path
+        from app.core.network_rag_integration import get_network_integrator
+        integrator = get_network_integrator()
+        if integrator:
+            nfs_status = integrator.get_status()
+            stats["network_filesystem"] = nfs_status
+    except Exception:
+        pass
     
-    try:
-        filepath = str(PATHS.knowledge_dir / filename)
-        result = await ingest_single_file(filepath)
-        return IngestionResponse(**result)
-    except Exception as e:
-        logger.error(f"Ingestion failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ingestion failed: {str(e)}"
-        )
+    return stats
 
-
-@app.post("/ingest/all", response_model=IngestionResponse)
-async def ingest_all_documents(rebuild: bool = False):
-    """Ingest all documents in the knowledge directory."""
-    from app.rag.ingestion import ingest_all_documents
-    
-    try:
-        result = await ingest_all_documents(rebuild=rebuild)
-        return IngestionResponse(**result)
-    except Exception as e:
-        logger.error(f"Batch ingestion failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Batch ingestion failed: {str(e)}"
-        )
-
-
-@app.get("/documents")
-async def list_documents():
-    """List all documents in the knowledge base."""
-    from pathlib import Path
-    
-    knowledge_dir = PATHS.knowledge_dir
-    if not knowledge_dir.exists():
-        return {"documents": []}
-    
-    documents = []
-    for file in knowledge_dir.iterdir():
-        if file.is_file():
-            documents.append({
-                "filename": file.name,
-                "size": file.stat().st_size,
-                "modified": datetime.fromtimestamp(file.stat().st_mtime).isoformat()
-            })
-    
-    return {"documents": documents}
-
-
-@app.get("/documents/{filename}")
-async def download_document(filename: str):
-    """Download a document from the knowledge base."""
-    from pathlib import Path
-    
-    filepath = PATHS.knowledge_dir / filename
-    
-    if not filepath.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
-    
-    # Guess mimetype
-    mimetype, _ = mimetypes.guess_type(filename)
-    
-    return FileResponse(
-        path=filepath,
-        filename=filename,
-        media_type=mimetype or "application/octet-stream"
-    )
-
-
-@app.delete("/documents/{filename}")
-async def delete_document(filename: str):
-    """Delete a document from the knowledge base."""
-    from pathlib import Path
-    
-    filepath = PATHS.knowledge_dir / filename
-    
-    if not filepath.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
-    
-    try:
-        filepath.unlink()
-        logger.info(f"Deleted document: {filename}")
-        return {"message": f"Document {filename} deleted successfully"}
-    except Exception as e:
-        logger.error(f"Failed to delete document: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete document: {str(e)}"
-        )
-
-
-# =============================================================================
-# Development/Debug Endpoints (disable in production)
-# =============================================================================
-
-if AGENT.debug_mode:
-    @app.get("/debug/memory")
-    async def debug_memory():
-        """Debug endpoint to inspect in-memory storage."""
-        from app.core.memory_store import InMemoryDatabase
-        
-        db = InMemoryDatabase()
-        return {
-            "documents": len(db.documents),
-            "embeddings": len(db.document_embeddings),
-            "chats": len(db.chats),
-            "models": list(db.models.keys()),
-            "embedding_cache_size": len(db.embedding_cache)
-        }
-    
-    @app.get("/debug/config")
-    async def debug_config():
-        """Debug endpoint to view current configuration."""
-        from app.config import config_manager
-        return config_manager.get_all_values()
-
-
-# =============================================================================
-# Application Entry Point
-# =============================================================================
 
 if __name__ == "__main__":
     import uvicorn
-    
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,  # Enable auto-reload during development
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)

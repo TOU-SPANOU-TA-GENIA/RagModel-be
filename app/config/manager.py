@@ -23,6 +23,7 @@ from app.config.schema import (
     PathSettings,
     DocumentSettings,
     ResponseSettings,
+    NetworkFilesystemSettings,  # ← ADD THIS
     ConfigCategory,
     ConfigField
 )
@@ -76,6 +77,7 @@ class ConfigurationManager:
             'paths': PathSettings(),
             'documents': DocumentSettings(),
             'response': ResponseSettings(),
+            'network_filesystem': NetworkFilesystemSettings(),  # ← ADD THIS
         }
     
     def initialize(self, config_file: Optional[str] = None, base_dir: Optional[str] = None):
@@ -103,22 +105,19 @@ class ConfigurationManager:
                     self._load_from_file()
     
     def _resolve_paths(self):
-        """Resolve relative paths to absolute paths."""
+        """Resolve relative paths to absolute paths - UPDATED: no knowledge_dir/instructions_dir."""
         base = Path(self._settings['paths'].base_dir)
         paths = self._settings['paths']
         
         # Create absolute paths
         paths.data_dir = str(base / paths.data_dir)
-        paths.knowledge_dir = str(base / "data" / "knowledge")
-        paths.instructions_dir = str(base / "data" / "instructions")
         paths.index_dir = str(base / paths.index_dir)
         paths.outputs_dir = str(base / paths.outputs_dir)
         paths.offload_dir = str(base / paths.offload_dir)
         paths.offline_models_dir = str(base / paths.offline_models_dir)
         
         # Create directories if they don't exist
-        for dir_path in [paths.knowledge_dir, paths.instructions_dir, 
-                        paths.outputs_dir, paths.offload_dir]:
+        for dir_path in [paths.outputs_dir, paths.offload_dir]:
             Path(dir_path).mkdir(parents=True, exist_ok=True)
     
     def _load_from_file(self):
@@ -201,6 +200,10 @@ class ConfigurationManager:
     def response(self) -> ResponseSettings:
         return self._settings['response']
     
+    @property
+    def network_filesystem(self) -> NetworkFilesystemSettings:
+        return self._settings['network_filesystem']
+    
     # =========================================================================
     # Dynamic access and updates
     # =========================================================================
@@ -211,6 +214,31 @@ class ConfigurationManager:
             settings = self._settings.get(category)
             if settings and hasattr(settings, field):
                 return getattr(settings, field)
+            return None
+    
+    def get_section(self, category: str) -> Optional[Dict[str, Any]]:
+        """
+        Get an entire configuration section as dictionary.
+        
+        Args:
+            category: Section name (e.g., 'llm', 'rag', 'network_filesystem')
+        
+        Returns:
+            Dictionary of all settings in that section, or None if not found
+        """
+        with self._lock:
+            settings = self._settings.get(category)
+            if settings:
+                # If it's a dataclass, convert to dict
+                if hasattr(settings, 'to_dict'):
+                    return settings.to_dict()
+                # Otherwise try asdict
+                try:
+                    return asdict(settings)
+                except:
+                    # If all else fails, return as-is (for dict-like objects)
+                    if isinstance(settings, dict):
+                        return settings
             return None
     
     def set(self, category: str, field: str, value: Any) -> bool:
@@ -261,51 +289,57 @@ class ConfigurationManager:
     
     def _validate_field(self, category: str, field: str, value: Any) -> bool:
         """Validate a field value against its metadata."""
-        # Get metadata for the settings class
         settings = self._settings.get(category)
         if not settings:
             return False
         
+        # Get metadata for this field
         metadata_method = getattr(settings.__class__, 'get_field_metadata', None)
         if not metadata_method:
-            return True  # No validation defined
+            return True  # No metadata, assume valid
         
-        metadata_list = metadata_method()
-        field_meta = next((m for m in metadata_list if m.name == field), None)
+        fields_metadata = metadata_method()
+        field_meta = next((f for f in fields_metadata if f.name == field), None)
         
         if not field_meta:
-            return True  # No specific validation
+            return True  # No metadata for field, assume valid
         
-        # Type validation
-        if field_meta.field_type == "int" and not isinstance(value, int):
-            return False
-        if field_meta.field_type == "float" and not isinstance(value, (int, float)):
-            return False
-        if field_meta.field_type == "bool" and not isinstance(value, bool):
-            return False
-        if field_meta.field_type == "str" and not isinstance(value, str):
-            return False
-        if field_meta.field_type == "list" and not isinstance(value, list):
-            return False
+        # Type check
+        if field_meta.field_type == "int":
+            if not isinstance(value, int):
+                try:
+                    value = int(value)
+                except:
+                    return False
+            
+            # Range check
+            if field_meta.min_value is not None and value < field_meta.min_value:
+                return False
+            if field_meta.max_value is not None and value > field_meta.max_value:
+                return False
         
-        # Range validation
-        if field_meta.min_value is not None and value < field_meta.min_value:
-            return False
-        if field_meta.max_value is not None and value > field_meta.max_value:
-            return False
+        elif field_meta.field_type == "float":
+            if not isinstance(value, (int, float)):
+                try:
+                    value = float(value)
+                except:
+                    return False
+            
+            # Range check
+            if field_meta.min_value is not None and value < field_meta.min_value:
+                return False
+            if field_meta.max_value is not None and value > field_meta.max_value:
+                return False
         
-        # Options validation
-        if field_meta.options and value not in field_meta.options:
-            return False
+        elif field_meta.field_type == "str":
+            # Options check
+            if field_meta.options and value not in field_meta.options:
+                return False
         
         return True
     
-    # =========================================================================
-    # Change callbacks
-    # =========================================================================
-    
-    def on_change(self, category: str, field: str, callback):
-        """Register a callback for when a configuration value changes."""
+    def register_callback(self, category: str, field: str, callback):
+        """Register a callback for when a field changes."""
         key = f"{category}.{field}"
         if key not in self._change_callbacks:
             self._change_callbacks[key] = []

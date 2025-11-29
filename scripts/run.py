@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # scripts/run.py
 """
-Setup and run the RAG system.
+Setup and run the RAG system with network filesystem support.
 
 Usage:
-    python scripts/run.py --ingest    # Build vector store
+    python scripts/run.py --ingest    # Index network files
     python scripts/run.py --run       # Start the server
     python scripts/run.py --full      # Both
 """
@@ -18,58 +18,78 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def check_environment():
-    """Check environment and create directories."""
-    from app.config import PATHS
+    """Check environment and network filesystem configuration."""
+    from app.config import config
     from app.utils.logger import setup_logger
     
     logger = setup_logger(__name__)
     logger.info("Checking environment...")
     
-    knowledge_dir = Path(PATHS.knowledge_dir)
-    instructions_dir = Path(PATHS.instructions_dir)
+    try:
+        # Check for network filesystem configuration
+        network_config = config.get_section('network_filesystem')
+        
+        if network_config and network_config.get('enabled'):
+            logger.info("✅ Network filesystem enabled")
+            shares = network_config.get('shares', [])
+            logger.info(f"Configured shares: {len(shares)}")
+            
+            for share in shares:
+                if share.get('enabled'):
+                    mount_path = share.get('mount_path', 'unknown')
+                    share_name = share.get('name', 'unnamed')
+                    logger.info(f"  📁 {share_name}: {mount_path}")
+                    
+                    # Check if mount path exists
+                    path = Path(mount_path)
+                    if path.exists():
+                        logger.info(f"     ✅ Path accessible")
+                    else:
+                        logger.warning(f"     ⚠️  Path not accessible")
+        else:
+            logger.warning("⚠️ Network filesystem not enabled")
+            logger.warning("Add 'network_filesystem' section to config.json")
     
-    issues = []
+    except Exception as e:
+        logger.error(f"Error checking network config: {e}")
+        import traceback
+        traceback.print_exc()
     
-    if not knowledge_dir.exists():
-        knowledge_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Created knowledge directory: {knowledge_dir}")
-    
-    if not instructions_dir.exists():
-        logger.warning(f"Instructions directory not found: {instructions_dir}")
-        issues.append("instructions_dir")
-    
-    docs = list(knowledge_dir.glob("*.txt")) + list(knowledge_dir.glob("*.md"))
-    if not docs:
-        logger.warning(f"No documents found in {knowledge_dir}")
-        issues.append("no_documents")
-    else:
-        logger.info(f"Found {len(docs)} documents")
-    
-    return len(issues) == 0
+    return True
 
 
 def run_ingestion(rebuild=True):
-    """Run document ingestion."""
-    from app.config import PATHS
-    from app.rag.ingestion import ingest_directory
+    """Run document ingestion from network shares."""
     from app.utils.logger import setup_logger
     
     logger = setup_logger(__name__)
-    logger.info("Starting ingestion...")
+    logger.info("📥 Starting network filesystem ingestion...")
     
     try:
-        result = ingest_directory(Path(PATHS.knowledge_dir), rebuild=rebuild)
+        from app.core.network_rag_integration import get_network_integrator
         
-        if result["success"]:
-            logger.info("✅ Ingestion completed!")
-            logger.info(f"   Documents: {result['documents_loaded']}")
-            logger.info(f"   Chunks: {result['chunks_created']}")
+        integrator = get_network_integrator()
+        if not integrator:
+            logger.error("❌ Network filesystem not initialized")
+            logger.error("Make sure the server has been started at least once to initialize network monitoring")
+            return False
+        
+        # Trigger manual indexing of all files
+        result = integrator.index_all_now()
+        
+        if result.get("success"):
+            logger.info("✅ Network ingestion completed!")
+            logger.info(f"   Files indexed: {result.get('files_indexed', 0)}")
+            logger.info(f"   Total network files: {result.get('total_files', 0)}")
             return True
         else:
-            logger.error(f"❌ Ingestion failed: {result['message']}")
+            logger.error(f"❌ Ingestion failed: {result.get('message', 'Unknown error')}")
             return False
+    
     except Exception as e:
         logger.error(f"❌ Ingestion error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -90,33 +110,35 @@ def start_server(host="localhost", port=8000):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Setup and run the RAG system")
-    parser.add_argument("--ingest", action="store_true", help="Run ingestion")
+    parser = argparse.ArgumentParser(description="Setup and run the RAG system with network filesystem")
+    parser.add_argument("--ingest", action="store_true", help="Run network file ingestion")
     parser.add_argument("--run", action="store_true", help="Start server")
     parser.add_argument("--full", action="store_true", help="Ingest and run")
-    parser.add_argument("--rebuild", action="store_true", help="Rebuild vector store")
+    parser.add_argument("--rebuild", action="store_true", help="Rebuild vector store (ignored for network)")
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8000)
     
     args = parser.parse_args()
     
+    # Always check environment
     check_environment()
     
     if args.full:
-        if run_ingestion(rebuild=True):
-            start_server(args.host, args.port)
-        else:
-            sys.exit(1)
+        # Start server (which will auto-start network monitoring and indexing)
+        start_server(args.host, args.port)
     elif args.ingest:
+        # Manual ingestion trigger
         success = run_ingestion(rebuild=args.rebuild)
         sys.exit(0 if success else 1)
     elif args.run:
         start_server(args.host, args.port)
     else:
         parser.print_help()
-        print("\nQuick start:")
-        print("  1. Add documents to: data/knowledge/")
-        print("  2. Run: python scripts/run.py --full")
+        print("\n📋 Quick start:")
+        print("  1. Ensure config.json has 'network_filesystem' section configured")
+        print("  2. Map network drive (e.g., Z: to \\\\192.168.1.227\\SharedDocs)")
+        print("  3. Run: python scripts/run.py --full")
+        print("\n💡 Network filesystem will auto-discover and index files on startup")
 
 
 if __name__ == "__main__":

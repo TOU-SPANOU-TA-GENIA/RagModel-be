@@ -36,7 +36,6 @@ from app.config import (
     LLM_MODEL_NAME,
     EMBEDDING_MODEL_NAME,
     SYSTEM_INSTRUCTION,
-    KNOWLEDGE_DIR,
     INDEX_DIR
 )
 from app.utils.logger import setup_logger
@@ -66,7 +65,7 @@ class AgentConfig:
         # Tool settings
         self.enable_tools = True
         self.tool_config = "default"  # "default", "military", "custom"
-        self.allowed_directories = [KNOWLEDGE_DIR, Path.cwd()]
+        self.allowed_directories = [Path.cwd()]
         
         # System settings
         self.system_instruction = SYSTEM_INSTRUCTION

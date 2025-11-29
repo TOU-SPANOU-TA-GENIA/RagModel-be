@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 from fastapi import UploadFile
 
-from ..config import KNOWLEDGE_DIR, RAG_CONFIG
+from ..config import RAG_CONFIG
 from ..core.exceptions import IngestionException
 from ..utils.logger import setup_logger
 from .retrievers import DocumentProcessor, LocalEmbeddingProvider, Document
@@ -86,7 +86,7 @@ def load_documents_from_directory(directory: Path) -> List[Document]:
     return documents
 
 
-def ingest_directory(directory: Path = KNOWLEDGE_DIR, rebuild: bool = False) -> dict:
+def ingest_directory(directory: Path = None, rebuild: bool = False) -> dict:
     """Ingest all documents from a directory into in-memory vector store."""
     try:
         logger.info(f"Starting ingestion from {directory} (rebuild={rebuild})")
@@ -209,3 +209,79 @@ async def ingest_single_file(filepath: str) -> dict:
             "message": str(e),
             "chunks_created": 0
         }
+        
+        
+# ADD THIS FUNCTION to app/rag/ingestion.py
+# Add it right after the ingest_single_file function (around line 150)
+
+def ingest_file(filepath: Path) -> bool:
+    """
+    Simple synchronous wrapper for ingesting a single file.
+    Used by network filesystem integration.
+    
+    Args:
+        filepath: Path to file to ingest
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Convert to string if Path object
+        filepath_str = str(filepath) if isinstance(filepath, Path) else filepath
+        
+        # Load document
+        path = Path(filepath_str)
+        if not path.exists():
+            logger.warning(f"File not found: {filepath_str}")
+            return False
+        
+        content = load_text_file(path)
+        doc = Document(
+            content=content,
+            metadata={
+                "source": path.name,
+                "filepath": str(path),
+                "file_type": path.suffix,
+            }
+        )
+        
+        # Process into chunks with embeddings
+        from app.core.memory_store import CachedEmbeddingProvider
+        
+        base_embedding_provider = LocalEmbeddingProvider()
+        embedding_provider = CachedEmbeddingProvider(base_embedding_provider)
+        
+        processor = DocumentProcessor(
+            embedding_provider=embedding_provider,
+            chunk_size=RAG_CONFIG["chunk_size"],
+            chunk_overlap=RAG_CONFIG["chunk_overlap"]
+        )
+        
+        chunks = processor.process_text(doc.content, doc.metadata)
+        
+        # Add to in-memory vector store
+        from app.core.memory_store import FastInMemoryVectorStore
+        
+        # Get or create global vector store (dimension=384 for all-MiniLM-L6-v2)
+        vector_store = FastInMemoryVectorStore(dimension=384)
+        
+        # Convert chunks to dicts
+        chunk_dicts = [
+            {
+                "content": chunk.content,
+                "metadata": chunk.metadata,
+                "embedding": chunk.embedding
+            }
+            for chunk in chunks
+        ]
+        
+        vector_store.add_documents(chunk_dicts)
+        
+        logger.info(f"✅ Ingested file: {path.name} ({len(chunks)} chunks)")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Failed to ingest {filepath}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False

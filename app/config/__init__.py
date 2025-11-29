@@ -17,6 +17,9 @@ Usage:
 """
 
 from pathlib import Path
+from app.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 from app.config.schema import (
     LLMSettings,
@@ -36,7 +39,10 @@ from app.config.manager import config_manager
 
 # Initialize configuration
 _base_dir = Path(__file__).parent.parent.parent
-config_manager.initialize(base_dir=str(_base_dir))
+config_manager.initialize(
+    config_file="config.json",  # ← ADD THIS!
+    base_dir=str(_base_dir)
+)
 
 # Convenient accessors
 config = config_manager
@@ -60,8 +66,6 @@ RESPONSE = config_manager.response
 # Paths (for backward compatibility)
 BASE_DIR = Path(PATHS.base_dir)
 DATA_DIR = Path(PATHS.data_dir)
-KNOWLEDGE_DIR = Path(PATHS.knowledge_dir)
-INSTRUCTIONS_DIR = Path(PATHS.instructions_dir)
 INDEX_DIR = Path(PATHS.index_dir)
 OFFLOAD_DIR = Path(PATHS.offload_dir)
 OFFLINE_MODELS_DIR = Path(PATHS.offline_models_dir)
@@ -107,11 +111,9 @@ USE_IN_MEMORY_STORAGE = True
 CACHE_MODELS_IN_MEMORY = True
 CACHE_EMBEDDINGS = EMBEDDING.cache_enabled
 
-# Tool settings (legacy)
+# Tool settings (legacy) - UPDATED: Removed KNOWLEDGE_DIR and INSTRUCTIONS_DIR
 AGENT_ALLOWED_DIRECTORIES = [
     DATA_DIR,
-    KNOWLEDGE_DIR,
-    INSTRUCTIONS_DIR,
     BASE_DIR / "logs",
     BASE_DIR / "config",
 ]
@@ -129,48 +131,81 @@ LOG_FORMAT = SERVER.log_format
 
 
 # =============================================================================
-# System instruction loading (legacy)
+# System instruction loading (UPDATED - no longer uses instruction files)
 # =============================================================================
 
 def load_system_instructions() -> str:
-    """Load system instructions from files."""
-    persona_file = INSTRUCTIONS_DIR / "persona.txt"
-    rules_file = INSTRUCTIONS_DIR / "rules.txt"
+    """Load system instructions from configuration."""
+    # Try to load from config first (if instructions module exists)
+    try:
+        from app.config.instructions import InstructionsSettings
+        instructions_data = config.get_section('instructions')
+        if instructions_data:
+            instructions = InstructionsSettings.from_dict(instructions_data)
+            return instructions.to_system_prompt()
+    except (ImportError, Exception) as e:
+        logger.warning(f"Could not load instructions from config: {e}")
     
-    persona = ""
-    rules = ""
-    
-    if persona_file.exists():
-        persona = persona_file.read_text(encoding="utf-8")
-    
-    if rules_file.exists():
-        rules = rules_file.read_text(encoding="utf-8")
-    
-    knowledge_instruction = """
+    # Fallback to default instructions
+    return """
+Your name is Panos and you are a helpful AI assistant.
 
-## IMPORTANT: YOUR KNOWLEDGE BASE
+## Core Principles
 
-You have access to a knowledge base containing information about:
-- Panos (the user)
-- System documentation
-- Configuration files
-- Procedures and guides
+**Directness:** Answer first, explain after. Don't deflect with questions unless truly ambiguous.
+
+**Context Awareness:** Use remembered information about the user when relevant. Don't force personal context on factual questions.
+
+**Instruction Following:** When users set rules ("when I say X, respond Y", "always be brief"), follow them precisely and consistently.
+
+**Natural Conversation:** Avoid repetition. Match the user's formality and style. Focus on being helpful over being social.
+
+## Response Pattern
+
+1. Direct answer
+2. Brief explanation if needed
+3. Follow-up only if genuinely relevant
+
+Don't narrate your reasoning process. Don't include meta-commentary. Just respond naturally.
+
+## Network Knowledge Base
+
+You have access to documents from network shares. When provided context in <context> tags, use it to answer questions accurately.
 
 When asked about information, you should:
 1. Use the context provided in <context> tags
 2. Answer based on the knowledge base first
 3. If information is not in the knowledge base, say so clearly
-"""
-    
-    combined = f"{persona}\n\n{rules}\n\n{knowledge_instruction}".strip()
-    
-    return combined if combined else """
-Your Name is Panos and you are a random 28 years old dude
 
-## IMPORTANT: YOUR KNOWLEDGE BASE
+## Tool Handling - File Operations
 
-You have access to a knowledge base with specific information.
-When context is provided in <context> tags, use it to answer questions.
+**What Happens:**
+- Tool auto-selects best file when multiple matches exist (prefers network share)
+- You receive complete file content with metadata
+
+**Your Response Pattern:**
+```
+I read [filename] from [location]:
+
+[content or answer based on content]
+
+[Optional: Note about other versions if relevant]
+```
+
+**Critical Don'ts:**
+- Don't ask "which file?" when content is provided
+- Don't repeat file selection questions
+- Don't ignore successfully retrieved content
+- Don't truncate content unless specifically asked
+
+**Example:**
+"I read test.txt from network share. It contains: [content]. Note: Also found versions in other folders."
+
+## Edge Cases
+
+**Ambiguous:** Ask for clarification only when genuinely needed.
+**Missing info:** Say you don't know rather than guess (check knowledge base first).
+**Conflicts:** Use most recent information or acknowledge the conflict.
 """
 
 
@@ -234,11 +269,9 @@ __all__ = [
     "ConfigCategory",
     "ConfigField",
     
-    # Legacy exports
+    # Legacy exports (UPDATED - removed KNOWLEDGE_DIR and INSTRUCTIONS_DIR)
     "BASE_DIR",
     "DATA_DIR",
-    "KNOWLEDGE_DIR",
-    "INSTRUCTIONS_DIR",
     "INDEX_DIR",
     "LLM_MODEL_NAME",
     "EMBEDDING_MODEL_NAME",

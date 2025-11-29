@@ -50,10 +50,8 @@ class LLMSettings:
     top_p: float = 0.9
     repetition_penalty: float = 1.1
     do_sample: bool = True
-    quantization: str = "4bit"  # "none", "4bit", "8bit"
-    device: str = "auto"  # "auto", "cuda", "cpu"
-    
-    # Pre-warming settings
+    quantization: str = "4bit"
+    device: str = "auto"
     prewarm_enabled: bool = True
     prewarm_prompts: List[str] = field(default_factory=lambda: ["Hello", "Hi", "Hey"])
     prewarm_delay: float = 0.5
@@ -64,23 +62,17 @@ class LLMSettings:
     @classmethod
     def get_field_metadata(cls) -> List[ConfigField]:
         return [
-            ConfigField("model_name", ConfigCategory.LLM, 
-                       "HuggingFace model name or local path", "str",
-                       "meta-llama/Llama-3.2-3B-Instruct", requires_restart=True),
+            ConfigField("model_name", ConfigCategory.LLM,
+                       "HuggingFace model path", "str", "meta-llama/Llama-3.2-3B-Instruct",
+                       requires_restart=True),
             ConfigField("max_new_tokens", ConfigCategory.LLM,
-                       "Maximum tokens to generate", "int", 2048, 64, 8192),
+                       "Maximum tokens to generate", "int", 2048, 1, 4096),
             ConfigField("temperature", ConfigCategory.LLM,
-                       "Randomness in generation (0=deterministic, 1=creative)", "float", 0.7, 0.0, 2.0),
+                       "Sampling temperature (higher = more random)", "float", 0.7, 0.0, 2.0),
             ConfigField("top_p", ConfigCategory.LLM,
                        "Nucleus sampling threshold", "float", 0.9, 0.0, 1.0),
             ConfigField("repetition_penalty", ConfigCategory.LLM,
                        "Penalty for repeating tokens", "float", 1.1, 1.0, 2.0),
-            ConfigField("quantization", ConfigCategory.LLM,
-                       "Model quantization level", "str", "4bit",
-                       options=["none", "4bit", "8bit"], requires_restart=True),
-            ConfigField("device", ConfigCategory.LLM,
-                       "Compute device", "str", "auto",
-                       options=["auto", "cuda", "cpu"], requires_restart=True),
         ]
 
 
@@ -104,19 +96,12 @@ class EmbeddingSettings:
     @classmethod
     def get_field_metadata(cls) -> List[ConfigField]:
         return [
-            ConfigField("model_name", ConfigCategory.RAG,
+            ConfigField("model_name", ConfigCategory.LLM,
                        "Embedding model name", "str",
                        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
                        requires_restart=True),
-            ConfigField("dimension", ConfigCategory.RAG,
-                       "Embedding vector dimension", "int", 384, 64, 4096,
-                       editable=False),
-            ConfigField("batch_size", ConfigCategory.RAG,
-                       "Batch size for embedding generation", "int", 32, 1, 256),
-            ConfigField("cache_enabled", ConfigCategory.RAG,
-                       "Enable embedding cache", "bool", True),
-            ConfigField("max_cache_size", ConfigCategory.RAG,
-                       "Maximum cached embeddings", "int", 10000, 100, 100000),
+            ConfigField("batch_size", ConfigCategory.LLM,
+                       "Batch size for embeddings", "int", 32, 1, 128),
         ]
 
 
@@ -126,7 +111,7 @@ class EmbeddingSettings:
 
 @dataclass
 class RAGSettings:
-    """Retrieval-Augmented Generation settings."""
+    """RAG system settings."""
     top_k: int = 3
     min_relevance_score: float = 0.2
     chunk_size: int = 500
@@ -143,13 +128,11 @@ class RAGSettings:
             ConfigField("top_k", ConfigCategory.RAG,
                        "Number of documents to retrieve", "int", 3, 1, 20),
             ConfigField("min_relevance_score", ConfigCategory.RAG,
-                       "Minimum similarity score for retrieval", "float", 0.2, 0.0, 1.0),
+                       "Minimum relevance score threshold", "float", 0.2, 0.0, 1.0),
             ConfigField("chunk_size", ConfigCategory.RAG,
-                       "Document chunk size in characters", "int", 500, 100, 2000),
+                       "Document chunk size (characters)", "int", 500, 100, 2000),
             ConfigField("chunk_overlap", ConfigCategory.RAG,
                        "Overlap between chunks", "int", 50, 0, 500),
-            ConfigField("use_faiss", ConfigCategory.RAG,
-                       "Use FAISS for vector storage", "bool", False, requires_restart=True),
         ]
 
 
@@ -160,13 +143,11 @@ class RAGSettings:
 @dataclass
 class AgentSettings:
     """Agent behavior settings."""
-    mode: str = "production"  # "production", "development", "military"
+    mode: str = "production"
     debug_mode: bool = False
     use_cache: bool = False
     max_tool_retries: int = 2
     tool_timeout: float = 30.0
-    
-    # Intent classification
     action_keyword_weight: float = 1.5
     question_keyword_weight: float = 1.0
     conversation_keyword_weight: float = 0.5
@@ -179,16 +160,12 @@ class AgentSettings:
     def get_field_metadata(cls) -> List[ConfigField]:
         return [
             ConfigField("mode", ConfigCategory.AGENT,
-                       "Agent operation mode", "str", "production",
-                       options=["production", "development", "military"]),
+                       "Agent mode", "str", "production",
+                       options=["basic", "enhanced", "production"]),
             ConfigField("debug_mode", ConfigCategory.AGENT,
                        "Enable debug output", "bool", False),
             ConfigField("max_tool_retries", ConfigCategory.AGENT,
-                       "Max retries for failed tools", "int", 2, 0, 5),
-            ConfigField("tool_timeout", ConfigCategory.AGENT,
-                       "Tool execution timeout (seconds)", "float", 30.0, 5.0, 120.0),
-            ConfigField("min_confidence_threshold", ConfigCategory.AGENT,
-                       "Minimum confidence for intent classification", "float", 0.5, 0.0, 1.0),
+                       "Maximum tool execution retries", "int", 2, 0, 5),
         ]
 
 
@@ -209,7 +186,7 @@ class ToolSettings:
         'ls', 'pwd', 'echo', 'date', 'whoami', 'df', 'free'
     ])
     show_file_content: bool = True
-    file_content_format: str = "pretty"  # "pretty", "raw", "minimal"
+    file_content_format: str = "pretty"
     max_content_display_lines: Optional[int] = None
     
     def to_dict(self) -> Dict[str, Any]:
@@ -220,30 +197,21 @@ class ToolSettings:
         return [
             ConfigField("max_file_size_mb", ConfigCategory.TOOLS,
                        "Maximum file size for reading (MB)", "int", 10, 1, 100),
-            ConfigField("allowed_extensions", ConfigCategory.TOOLS,
-                       "Allowed file extensions", "list", 
-                       ['.txt', '.md', '.json', '.yaml']),
-            ConfigField("allowed_commands", ConfigCategory.TOOLS,
-                       "Allowed system commands", "list",
-                       ['ls', 'pwd', 'echo', 'date']),
-            ConfigField("file_content_format", ConfigCategory.TOOLS,
-                       "How to display file content", "str", "pretty",
-                       options=["pretty", "raw", "minimal"]),
         ]
 
 
 # =============================================================================
-# Conversation Memory Configuration
+# Memory Configuration
 # =============================================================================
 
 @dataclass
 class MemorySettings:
     """Conversation memory settings."""
     max_sessions: int = 100
-    session_timeout: int = 3600  # seconds
+    session_timeout: int = 3600
     max_history_messages: int = 10
     store_instructions: bool = True
-    instruction_timeout: int = 3600  # seconds
+    instruction_timeout: int = 3600
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -253,12 +221,6 @@ class MemorySettings:
         return [
             ConfigField("max_sessions", ConfigCategory.STORAGE,
                        "Maximum concurrent sessions", "int", 100, 10, 1000),
-            ConfigField("session_timeout", ConfigCategory.STORAGE,
-                       "Session timeout (seconds)", "int", 3600, 300, 86400),
-            ConfigField("max_history_messages", ConfigCategory.STORAGE,
-                       "Messages to include in context", "int", 10, 1, 50),
-            ConfigField("instruction_timeout", ConfigCategory.STORAGE,
-                       "User instruction timeout (seconds)", "int", 3600, 300, 86400),
         ]
 
 
@@ -288,11 +250,6 @@ class ServerSettings:
                        "Server host address", "str", "localhost", requires_restart=True),
             ConfigField("port", ConfigCategory.SERVER,
                        "Server port", "int", 8000, 1024, 65535, requires_restart=True),
-            ConfigField("cors_origins", ConfigCategory.SERVER,
-                       "Allowed CORS origins", "list", ["http://localhost:4200"]),
-            ConfigField("log_level", ConfigCategory.SERVER,
-                       "Logging level", "str", "INFO",
-                       options=["DEBUG", "INFO", "WARNING", "ERROR"]),
         ]
 
 
@@ -303,10 +260,8 @@ class ServerSettings:
 @dataclass
 class PathSettings:
     """File system path settings."""
-    base_dir: str = ""  # Set at runtime
+    base_dir: str = ""
     data_dir: str = "data"
-    knowledge_dir: str = "data/knowledge"
-    instructions_dir: str = "data/instructions"
     index_dir: str = "faiss_index"
     outputs_dir: str = "outputs"
     offload_dir: str = "offload"
@@ -314,17 +269,6 @@ class PathSettings:
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
-    
-    @classmethod
-    def get_field_metadata(cls) -> List[ConfigField]:
-        return [
-            ConfigField("knowledge_dir", ConfigCategory.STORAGE,
-                       "Knowledge base directory", "path", "data/knowledge"),
-            ConfigField("instructions_dir", ConfigCategory.STORAGE,
-                       "System instructions directory", "path", "data/instructions"),
-            ConfigField("outputs_dir", ConfigCategory.STORAGE,
-                       "Generated files output directory", "path", "outputs"),
-        ]
 
 
 # =============================================================================
@@ -343,24 +287,13 @@ class DocumentSettings:
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
-    
-    @classmethod
-    def get_field_metadata(cls) -> List[ConfigField]:
-        return [
-            ConfigField("default_font", ConfigCategory.TOOLS,
-                       "Default document font", "str", "Arial"),
-            ConfigField("default_font_size", ConfigCategory.TOOLS,
-                       "Default font size", "int", 11, 8, 24),
-            ConfigField("title_font_size", ConfigCategory.TOOLS,
-                       "Title font size", "int", 24, 14, 48),
-        ]
 
 
 # =============================================================================
-# Response Cleaning Configuration
+# Response Processing Configuration
 # =============================================================================
 
-@dataclass 
+@dataclass
 class ResponseSettings:
     """Response processing settings."""
     clean_xml_tags: bool = True
@@ -371,14 +304,63 @@ class ResponseSettings:
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+# =============================================================================
+# Network Filesystem Configuration
+# =============================================================================
+
+@dataclass
+class ShareConfig:
+    """Configuration for a single network share."""
+    name: str
+    mount_path: str
+    share_type: str = "smb"
+    enabled: bool = True
+    auto_index: bool = True
+    watch_for_changes: bool = True
+    scan_interval: int = 300
+    include_extensions: List[str] = field(default_factory=lambda: [
+        ".txt", ".md", ".pdf", ".doc", ".docx",
+        ".xls", ".xlsx", ".csv", ".json", ".yaml",
+        ".ppt", ".pptx", ".log", ".xml", ".html"
+    ])
+    exclude_patterns: List[str] = field(default_factory=lambda: [
+        ".*", "~$*", "Thumbs.db", "desktop.ini",
+        "*.tmp", "*.temp", "$RECYCLE.BIN"
+    ])
+    max_file_size_mb: int = 100
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class NetworkFilesystemSettings:
+    """Network filesystem monitoring settings."""
+    enabled: bool = False
+    auto_start_monitoring: bool = True
+    shares: List[Dict[str, Any]] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'NetworkFilesystemSettings':
+        """Create from dictionary (used when loading from JSON)."""
+        return cls(
+            enabled=data.get('enabled', False),
+            auto_start_monitoring=data.get('auto_start_monitoring', True),
+            shares=data.get('shares', [])
+        )
     
     @classmethod
     def get_field_metadata(cls) -> List[ConfigField]:
         return [
-            ConfigField("clean_xml_tags", ConfigCategory.LLM,
-                       "Remove XML tags from responses", "bool", True),
-            ConfigField("clean_meta_commentary", ConfigCategory.LLM,
-                       "Remove meta-commentary from responses", "bool", True),
-            ConfigField("max_response_length", ConfigCategory.LLM,
-                       "Maximum response length (None=unlimited)", "int", None, 100, 10000),
+            ConfigField("enabled", ConfigCategory.STORAGE,
+                       "Enable network filesystem monitoring", "bool", False, 
+                       requires_restart=True),
+            ConfigField("auto_start_monitoring", ConfigCategory.STORAGE,
+                       "Auto-start monitoring on startup", "bool", True,
+                       requires_restart=True),
         ]

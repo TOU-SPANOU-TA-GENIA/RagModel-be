@@ -40,5 +40,6 @@ __all__ = [
     "create_mock_retriever",
     "save_upload",
     "ingest_single_file",
+    "ingest_file",
     "ingest_directory"
 ]

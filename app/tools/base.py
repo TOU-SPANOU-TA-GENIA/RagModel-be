@@ -20,7 +20,7 @@ from app.tools.system_tools import (
     ExecuteCommandTool,
     DatabaseQueryTool
 )
-from app.config import KNOWLEDGE_DIR, DATA_DIR, BASE_DIR
+from app.config import DATA_DIR, BASE_DIR
 from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -47,7 +47,7 @@ def create_default_tools() -> SimpleToolRegistry:
     try:
         from app.tools.enhanced_file_tools import create_enhanced_file_tools
         
-        search_dirs = [KNOWLEDGE_DIR, DATA_DIR, BASE_DIR / "logs"]
+        search_dirs = [DATA_DIR, BASE_DIR / "logs"]
         enhanced_tools = create_enhanced_file_tools(search_dirs)
         
         for tool in enhanced_tools.values():
@@ -56,7 +56,7 @@ def create_default_tools() -> SimpleToolRegistry:
         logger.info("Registered enhanced file tools")
     except ImportError as e:
         logger.warning(f"Enhanced tools unavailable: {e}, using basic")
-        registry.register(ReadFileTool(allowed_dirs=[KNOWLEDGE_DIR, DATA_DIR]))
+        registry.register(ReadFileTool(allowed_dirs=[DATA_DIR]))
     
     registry.register(WriteFileTool())
     registry.register(ListFilesTool())
@@ -77,7 +77,7 @@ def create_restricted_tool_registry() -> SimpleToolRegistry:
     """Create registry for military environment."""
     registry = SimpleToolRegistry()
     
-    restricted_dirs = [KNOWLEDGE_DIR, DATA_DIR, BASE_DIR / "logs"]
+    restricted_dirs = [DATA_DIR, BASE_DIR / "logs"]
     
     try:
         from app.tools.enhanced_file_tools import create_enhanced_file_tools

@@ -346,14 +346,13 @@ class InteractiveFileReadTool(BaseTool):
         for match in matches:
             match_path = Path(match["path"])
             try:
-                # Check if path is under knowledge directory
-                match_path.relative_to(KNOWLEDGE_DIR)
-                best_match = match
-                selection_reason = "from knowledge directory"
-                logger.info(f"Selected file from knowledge directory: {match['path']}")
-                break
-            except ValueError:
-                # Not in knowledge directory, continue
+                # Check if path is from network share (preferred)
+                if "network" in str(match_path).lower() or str(match_path).startswith(("Z:", "z:")):
+                    best_match = match
+                    selection_reason = "from network share"
+                    logger.info(f"Selected file from network share: {match['path']}")
+                    break
+            except Exception:
                 continue
         
         # Strategy 2: If no knowledge dir match, use highest relevance
