@@ -91,11 +91,11 @@ class NetworkRAGIntegrator:
         for file_meta in unindexed:
             try:
                 # Call the RAG ingestion function
-                success = self.rag_ingestion_func(file_meta.file_path)
+                success = self.rag_ingestion_func(file_meta.path)
                 
                 if success:
                     # Mark as indexed
-                    self.monitor.mark_as_indexed(file_meta.file_path)
+                    self.monitor.mark_as_indexed(file_meta.path)
                     indexed_count += 1
                     logger.info(f"Indexed: {file_meta.filename}")
                 else:
@@ -137,10 +137,10 @@ class NetworkRAGIntegrator:
             indexed_count = 0
             for file_meta in unindexed:
                 try:
-                    success = self.rag_ingestion_func(file_meta.file_path)
+                    success = self.rag_ingestion_func(file_meta.path)
                     
                     if success:
-                        self.monitor.mark_as_indexed(file_meta.file_path)
+                        self.monitor.mark_as_indexed(file_meta.path)
                         indexed_count += 1
                         logger.info(f"✓ Indexed: {file_meta.filename}")
                     else:
@@ -207,7 +207,7 @@ class NetworkFileAccessor:
         
         if results:
             # Return first match
-            return results[0].file_path
+            return results[0].path
         
         return None
     
@@ -227,7 +227,7 @@ class NetworkFileAccessor:
         return [
             {
                 "filename": r.filename,
-                "path": str(r.file_path),
+                "path": str(r.path),
                 "share": r.share_name,
                 "size_mb": round(r.size_bytes / (1024 * 1024), 2),
                 "modified": r.modified_time.isoformat() if r.modified_time else None,

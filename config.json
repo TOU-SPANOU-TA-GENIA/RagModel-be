@@ -4,30 +4,44 @@
     "max_new_tokens": 512,
     "temperature": 0.7,
     "top_p": 0.9,
-    "do_sample": true,
     "repetition_penalty": 1.1,
-    "device": "auto",
+    "do_sample": true,
     "quantization": "4bit",
-    "trust_remote_code": true
+    "device": "auto",
+    "prewarm_enabled": true,
+    "prewarm_prompts": [
+      "Hello",
+      "Hi",
+      "Hey"
+    ],
+    "prewarm_delay": 0.5
   },
   "embedding": {
     "model_name": "sentence-transformers/all-MiniLM-L6-v2",
-    "device": "cpu",
+    "dimension": 384,
+    "normalize": true,
     "batch_size": 32,
-    "cache_enabled": true
+    "cache_enabled": true,
+    "max_cache_size": 10000
   },
   "rag": {
     "top_k": 5,
+    "min_relevance_score": 0.3,
     "chunk_size": 500,
     "chunk_overlap": 50,
-    "min_relevance_score": 0.3,
-    "use_hybrid_search": false
+    "use_faiss": false,
+    "rerank_enabled": false
   },
   "agent": {
     "mode": "enhanced",
-    "use_cache": true,
     "debug_mode": false,
-    "max_iterations": 10
+    "use_cache": true,
+    "max_tool_retries": 2,
+    "tool_timeout": 30.0,
+    "action_keyword_weight": 1.5,
+    "question_keyword_weight": 1.0,
+    "conversation_keyword_weight": 0.5,
+    "min_confidence_threshold": 0.5
   },
   "tools": {
     "max_file_size_mb": 10,
@@ -88,15 +102,19 @@
     "offline_models_dir": "offline_models"
   },
   "documents": {
-    "default_format": "docx",
-    "include_metadata": true,
-    "template_dir": "templates"
+    "default_font": "Arial",
+    "default_font_size": 11,
+    "title_font_size": 24,
+    "heading1_font_size": 18,
+    "heading2_font_size": 14,
+    "max_filename_length": 200
   },
   "response": {
-    "max_response_length": 2000,
-    "use_markdown": true,
-    "include_sources": true,
-    "stream_responses": false
+    "clean_xml_tags": true,
+    "clean_meta_commentary": true,
+    "clean_reasoning_markers": true,
+    "normalize_whitespace": true,
+    "max_response_length": 2000
   },
   "network_filesystem": {
     "enabled": true,
