@@ -5,10 +5,11 @@ Ensures users see clean, professional responses without implementation details.
 """
 
 import re
-from typing import List, Tuple
+from typing import List
 from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
 
 class ResponseCleaner:
     """
@@ -144,13 +145,91 @@ class ResponseCleaner:
         return [self.clean(response) for response in responses]
 
 
-# Global instance
-response_cleaner = ResponseCleaner()
+class EnhancedResponseCleaner:
+    """
+    Enhanced response cleaner with two-phase cleaning:
+    1. Extract response from thinking/response structure
+    2. Clean any remaining artifacts
+    
+    This catches "Thinking:" prefix patterns that the base cleaner misses.
+    """
+    
+    def __init__(self):
+        self._base_cleaner = ResponseCleaner()
+        
+        # Patterns that indicate thinking content (to be removed entirely)
+        self.thinking_block_patterns = [
+            # Explicit thinking blocks
+            (r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE),
+            (r'<internal_analysis>.*?</internal_analysis>', re.DOTALL | re.IGNORECASE),
+            (r'<response_guidance>.*?</response_guidance>', re.DOTALL | re.IGNORECASE),
+            
+            # "Thinking:" style blocks (everything from Thinking: to double newline or Response:)
+            (r'Thinking:.*?(?=Response:|$|\n\n[A-Z])', re.DOTALL | re.IGNORECASE),
+            
+            # Analysis blocks at start
+            (r'^(?:Analysis|Internal analysis|Reasoning):.*?(?=\n\n|\nResponse:)', re.DOTALL | re.IGNORECASE | re.MULTILINE),
+        ]
+        
+        # Patterns for stray thinking artifacts
+        self.artifact_patterns = [
+            r'^Thinking:\s*',
+            r'^Response:\s*',
+            r'^Analysis:\s*',
+            r'\(DO NOT include in response\)',
+            r'Guidelines:.*?(?=\n\n|$)',
+            r'Internal analysis[^:]*:',
+            
+            # Reasoning about process
+            r'(?:However|But|Therefore),?\s+(?:we cannot|I cannot|since we|unfortunately)[^.]*(?:evidence|information|data)[^.]*\.',
+            
+            # Let me/I will style thinking
+            r"(?:Let me|I'll|I will)\s+(?:analyze|think|consider|examine)[^.]*\.",
+        ]
+    
+    def clean(self, response: str) -> str:
+        """Clean response with enhanced two-phase approach."""
+        if not response:
+            return response
+        
+        cleaned = response
+        
+        # Phase 1: Remove thinking blocks
+        for pattern, flags in self.thinking_block_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=flags)
+        
+        # Phase 2: Extract from <response> tags if present
+        response_match = re.search(
+            r'<response>(.*?)</response>',
+            cleaned,
+            re.DOTALL | re.IGNORECASE
+        )
+        if response_match:
+            cleaned = response_match.group(1)
+        
+        # Phase 3: Clean artifacts
+        for pattern in self.artifact_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.MULTILINE)
+        
+        # Phase 4: Apply base cleaner
+        cleaned = self._base_cleaner.clean(cleaned)
+        
+        # Phase 5: Final whitespace normalization
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        cleaned = cleaned.strip()
+        
+        return cleaned
+
+
+# Global instances
+_base_cleaner = ResponseCleaner()
+_enhanced_cleaner = EnhancedResponseCleaner()
 
 
 def clean_response(response: str) -> str:
     """
     Convenience function to clean a single response.
+    Uses enhanced cleaner for better thinking removal.
     
     Usage:
         from app.llm.response_cleaner import clean_response
@@ -158,4 +237,12 @@ def clean_response(response: str) -> str:
         raw_response = llm.generate(prompt)
         clean = clean_response(raw_response)
     """
-    return response_cleaner.clean(response)
+    return _enhanced_cleaner.clean(response)
+
+
+def clean_response_basic(response: str) -> str:
+    """
+    Basic cleaning without thinking extraction.
+    Use this if you've already extracted the response from thinking tags.
+    """
+    return _base_cleaner.clean(response)

@@ -94,8 +94,8 @@ class NetworkRAGIntegrator:
                 success = self.rag_ingestion_func(file_meta.path)
                 
                 if success:
-                    # Mark as indexed
-                    self.monitor.mark_indexed(file_meta.path)
+                    # FIX: Use file_hash instead of path
+                    self.monitor.mark_indexed(file_meta.file_hash)
                     indexed_count += 1
                     logger.info(f"Indexed: {file_meta.filename}")
                 else:
@@ -140,7 +140,8 @@ class NetworkRAGIntegrator:
                     success = self.rag_ingestion_func(file_meta.path)
                     
                     if success:
-                        self.monitor.mark_indexed(file_meta.path)
+                        # FIX: Use file_hash instead of path
+                        self.monitor.mark_indexed(file_meta.file_hash)
                         indexed_count += 1
                         logger.info(f"✓ Indexed: {file_meta.filename}")
                     else:
@@ -197,69 +198,64 @@ class NetworkFileAccessor:
         Find a file by name in network shares.
         
         Args:
-            filename: Name of file to find
-            share_name: Optional share name to limit search to
+            filename: Name or partial name to search for
+            share_name: Limit to specific share (optional)
         
         Returns:
             Path to file if found, None otherwise
         """
-        results = self.monitor.search_files(filename, share_name=share_name)
-        
-        if results:
-            # Return first match
-            return results[0].path
-        
-        return None
+        metadata = self.monitor.get_file_by_name(filename, share_name)
+        return metadata.path if metadata else None
     
     def search_files(self, query: str, share_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Search for files matching query.
         
-        Args:
-            query: Search query
-            share_name: Optional share to limit search to
-        
         Returns:
-            List of matching files with metadata
+            List of file info dicts with path, name, share, size
         """
-        results = self.monitor.search_files(query, share_name=share_name)
+        matches = self.monitor.search_files(query, share_name)
         
         return [
             {
-                "filename": r.filename,
-                "path": str(r.path),
-                "share": r.share_name,
-                "size_mb": round(r.size_bytes / (1024 * 1024), 2),
-                "modified": r.modified_time.isoformat() if r.modified_time else None,
-                "indexed": r.indexed
+                "path": str(m.path),
+                "name": m.filename,
+                "share": m.share_name,
+                "size_mb": round(m.size_bytes / (1024 * 1024), 2),
+                "modified": m.modified_time
             }
-            for r in results
+            for m in matches
         ]
     
-    def get_file_content(self, filename: str, share_name: Optional[str] = None) -> Optional[str]:
+    def read_file(self, file_path: Path) -> Optional[str]:
         """
-        Get content of a file.
+        Read content from a network file.
         
         Args:
-            filename: File to read
-            share_name: Optional share to limit search to
+            file_path: Full path to the file
         
         Returns:
-            File content as string, or None if not found/readable
+            File content as string, or None if unreadable
         """
-        file_path = self.find_file(filename, share_name)
-        
-        if not file_path:
-            return None
-        
         try:
             return file_path.read_text(encoding='utf-8')
+        except UnicodeDecodeError:
+            try:
+                return file_path.read_text(encoding='latin-1')
+            except Exception as e:
+                logger.warning(f"Could not read file {file_path}: {e}")
+                return None
         except Exception as e:
-            logger.error(f"Could not read {file_path}: {e}")
+            logger.warning(f"Could not read file {file_path}: {e}")
             return None
     
-    def list_shares(self) -> List[Dict[str, Any]]:
-        """List all configured network shares."""
+    def get_available_shares(self) -> List[Dict[str, Any]]:
+        """
+        Get list of available network shares with stats.
+        
+        Returns:
+            List of share info dicts
+        """
         stats = self.monitor.get_stats()
         
         shares = []

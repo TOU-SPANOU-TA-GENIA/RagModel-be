@@ -107,7 +107,8 @@ def ingest_directory(directory: Path = None, rebuild: bool = False) -> dict:
         from app.core.memory_store import FastInMemoryVectorStore, CachedEmbeddingProvider
         
         # Process documents
-        base_embedding_provider = LocalEmbeddingProvider()
+        from app.config import EMBEDDING_MODEL_NAME
+        base_embedding_provider = LocalEmbeddingProvider(EMBEDDING_MODEL_NAME)
         embedding_provider = CachedEmbeddingProvider(base_embedding_provider)
         
         processor = DocumentProcessor(
@@ -217,20 +218,14 @@ async def ingest_single_file(filepath: str) -> dict:
 def ingest_file(filepath: Path) -> bool:
     """
     Simple synchronous wrapper for ingesting a single file.
-    Used by network filesystem integration.
-    
-    Args:
-        filepath: Path to file to ingest
-    
-    Returns:
-        True if successful, False otherwise
+    Uses the CONFIGURED embedding model for consistency.
     """
     try:
-        # Convert to string if Path object
-        filepath_str = str(filepath) if isinstance(filepath, Path) else filepath
+        from app.config import EMBEDDING_MODEL_NAME  # Use config!
         
-        # Load document
+        filepath_str = str(filepath) if isinstance(filepath, Path) else filepath
         path = Path(filepath_str)
+        
         if not path.exists():
             logger.warning(f"File not found: {filepath_str}")
             return False
@@ -245,10 +240,10 @@ def ingest_file(filepath: Path) -> bool:
             }
         )
         
-        # Process into chunks with embeddings
         from app.core.memory_store import CachedEmbeddingProvider
         
-        base_embedding_provider = LocalEmbeddingProvider()
+        # FIX: Use configured model name, not default
+        base_embedding_provider = LocalEmbeddingProvider(EMBEDDING_MODEL_NAME)
         embedding_provider = CachedEmbeddingProvider(base_embedding_provider)
         
         processor = DocumentProcessor(
@@ -259,13 +254,9 @@ def ingest_file(filepath: Path) -> bool:
         
         chunks = processor.process_text(doc.content, doc.metadata)
         
-        # Add to in-memory vector store
         from app.core.memory_store import FastInMemoryVectorStore
-        
-        # Get or create global vector store (dimension=384 for all-MiniLM-L6-v2)
         vector_store = FastInMemoryVectorStore(dimension=384)
         
-        # Convert chunks to dicts
         chunk_dicts = [
             {
                 "content": chunk.content,
@@ -285,3 +276,9 @@ def ingest_file(filepath: Path) -> bool:
         import traceback
         traceback.print_exc()
         return False
+    
+    
+    
+    
+    
+    

@@ -172,18 +172,16 @@ class AgentBuilder:
             from app.rag.retrievers import SimpleRetriever, LocalEmbeddingProvider
             from app.core.memory_store import FastInMemoryVectorStore, CachedEmbeddingProvider
             
-            # Create base embedding provider
+            # FIX: Use self.config.embedding_model_name which should match ingestion
             base_embedding_provider = LocalEmbeddingProvider(self.config.embedding_model_name)
             
-            # Wrap with caching
             embedding_provider = CachedEmbeddingProvider(base_embedding_provider)
-            
-            # Use in-memory vector store
             vector_store = FastInMemoryVectorStore()
             
             self.retriever = SimpleRetriever(embedding_provider, vector_store)
             
         return self
+    
     
     def build_tools(self) -> 'AgentBuilder':
         """Build tool registry based on config."""

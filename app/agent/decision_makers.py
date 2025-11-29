@@ -13,6 +13,93 @@ from app.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+class ParameterExtractors:
+    """Extract parameters from natural language queries."""
+    
+    def extract_filename(self, query: str) -> Optional[str]:
+        """Extract filename from query."""
+        # Look for quoted filenames
+        quoted = re.search(r'["\']([^"\']+\.\w+)["\']', query)
+        if quoted:
+            return quoted.group(1)
+        
+        # Look for filenames with extensions
+        file_match = re.search(r'\b(\S+\.\w{2,4})\b', query)
+        if file_match:
+            return file_match.group(1)
+        
+        return None
+    
+    def extract_directory(self, query: str) -> Optional[str]:
+        """Extract directory path from query."""
+        # Look for explicit paths
+        path_match = re.search(r'(?:in|from|at)\s+["\']?([/\\]?\S+)["\']?', query.lower())
+        if path_match:
+            return path_match.group(1)
+        return None
+    
+    def extract_extension_pattern(self, query: str) -> Optional[str]:
+        """Extract file extension pattern (e.g., *.txt)."""
+        # Look for extension mentions
+        ext_match = re.search(r'\.(\w{2,4})\s+files?|(\w{2,4})\s+files?', query.lower())
+        if ext_match:
+            ext = ext_match.group(1) or ext_match.group(2)
+            return f"*.{ext}"
+        return None
+    
+    def extract_search_query(self, query: str) -> Optional[str]:
+        """Extract search query for file search."""
+        # Remove action words
+        cleaned = re.sub(
+            r'^(?:search|find|look)\s+(?:for\s+)?(?:files?\s+)?(?:named|called|matching)?\s*',
+            '', 
+            query.lower()
+        ).strip()
+        return cleaned if cleaned else None
+    
+    def extract_write_params(self, query: str) -> Dict[str, Any]:
+        """Extract parameters for file writing."""
+        params = {}
+        
+        # Extract filename
+        filename = self.extract_filename(query)
+        if filename:
+            params['file_path'] = filename
+        
+        # Content would typically come from context, not query
+        params['content'] = ''
+        
+        return params
+    
+    def extract_document_params(self, query: str) -> Dict[str, Any]:
+        """Extract parameters for document generation."""
+        params = {'format': 'docx', 'title': 'Document'}
+        
+        # Detect format
+        if re.search(r'\bpdf\b', query.lower()):
+            params['format'] = 'pdf'
+        elif re.search(r'\b(?:ppt|powerpoint|presentation)\b', query.lower()):
+            params['format'] = 'pptx'
+        elif re.search(r'\b(?:word|doc)\b', query.lower()):
+            params['format'] = 'docx'
+        
+        return params
+    
+    def extract_command(self, query: str) -> Optional[str]:
+        """Extract shell command from query."""
+        # Look for backtick-enclosed commands
+        backtick = re.search(r'`([^`]+)`', query)
+        if backtick:
+            return backtick.group(1)
+        
+        # Look for "run X" pattern
+        run_match = re.search(r'run\s+(?:command\s+)?["\']?(.+?)["\']?$', query.lower())
+        if run_match:
+            return run_match.group(1)
+        
+        return None
+
+
 class SimpleDecisionMaker(DecisionMaker):
     """
     Rule-based decision maker for tool selection.
@@ -55,160 +142,165 @@ class SimpleDecisionMaker(DecisionMaker):
         return decision
     
     def _identify_tool(self, query: str) -> Optional[Dict[str, Any]]:
-        """Identify which tool to use."""
+        """
+        Identify which tool to use based on query patterns.
+        Order matters: more specific patterns should come first.
+        """
         query_lower = query.lower()
         
-        # Document generation (check first)
-        if self._is_document_request(query_lower):
-            doc_info = self._extractors.extract_document_request(query)
-            if doc_info[0]:
+        # =========================================================================
+        # 1. LIST/SHOW FILES PATTERNS (check first - most likely to be misclassified)
+        # =========================================================================
+        list_patterns = [
+            # Explicit list requests
+            r'list\s+(?:all\s+)?(?:the\s+)?files',
+            r'show\s+(?:me\s+)?(?:all\s+)?(?:the\s+)?files',
+            r'what\s+files\s+(?:do\s+you\s+)?(?:have|see|can)',
+            r'which\s+files\s+(?:do\s+you\s+)?(?:have|see|can)',
+            r'display\s+(?:all\s+)?(?:the\s+)?files',
+            
+            # Access/availability questions
+            r'(?:files|documents)\s+(?:do\s+)?you\s+(?:have|see)\s+access',
+            r'(?:what|which)\s+(?:files|documents)\s+(?:are\s+)?available',
+            r'files\s+you\s+(?:can\s+)?(?:see|access|read)',
+            
+            # Directory listing
+            r'(?:show|list|display)\s+(?:the\s+)?directory',
+            r'(?:what\'?s?|show)\s+in\s+(?:the\s+)?(?:folder|directory)',
+            
+            # Generic "all files" patterns
+            r'all\s+(?:the\s+)?(?:txt|pdf|doc|files)',
+            r'(?:every|all)\s+file',
+        ]
+        
+        for pattern in list_patterns:
+            if re.search(pattern, query_lower):
+                # Extract optional directory or pattern
+                directory = self._extractors.extract_directory(query) or "."
+                file_pattern = self._extractors.extract_extension_pattern(query) or "*"
+                
                 return {
-                    'name': 'generate_document',
+                    'name': 'list_files',
                     'params': {
-                        'doc_type': doc_info[0],
-                        'title': doc_info[1] or 'Generated Document',
-                        'content': doc_info[2] or query
+                        'directory': directory,
+                        'pattern': file_pattern
                     }
                 }
         
-        # File reading
-        if self._is_file_read_request(query_lower):
-            file_ref = self._extractors.extract_file_reference(query)
-            if file_ref and self._validate_file_reference(file_ref):
+        # =========================================================================
+        # 2. SEARCH FILES PATTERNS
+        # =========================================================================
+        search_patterns = [
+            r'search\s+(?:for\s+)?(?:files?|documents?)',
+            r'find\s+(?:files?|documents?)\s+(?:named|called|matching)',
+            r'look\s+for\s+(?:files?|documents?)',
+        ]
+        
+        for pattern in search_patterns:
+            if re.search(pattern, query_lower):
+                search_query = self._extractors.extract_search_query(query)
+                if search_query:
+                    return {
+                        'name': 'search_files',
+                        'params': {'query': search_query}
+                    }
+        
+        # =========================================================================
+        # 3. READ FILE PATTERNS (must have specific file reference)
+        # =========================================================================
+        read_patterns = [
+            r'read\s+(?:the\s+)?(?:file\s+)?["\']?(\S+\.\w+)["\']?',
+            r'open\s+(?:the\s+)?(?:file\s+)?["\']?(\S+\.\w+)["\']?',
+            r'show\s+(?:me\s+)?(?:the\s+)?(?:contents?\s+of\s+)?["\']?(\S+\.\w+)["\']?',
+            r'(?:what\'?s?\s+in|display)\s+["\']?(\S+\.\w+)["\']?',
+        ]
+        
+        for pattern in read_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                file_identifier = match.group(1) if match.groups() else None
+                if not file_identifier:
+                    file_identifier = self._extractors.extract_filename(query)
+                
+                if file_identifier:
+                    return {
+                        'name': 'read_file',
+                        'params': {'file_identifier': file_identifier}
+                    }
+        
+        # =========================================================================
+        # 4. WRITE FILE PATTERNS
+        # =========================================================================
+        write_patterns = [
+            r'(?:write|save|create)\s+(?:a\s+)?(?:new\s+)?file',
+            r'save\s+(?:this\s+)?(?:to|as)\s+',
+        ]
+        
+        for pattern in write_patterns:
+            if re.search(pattern, query_lower):
                 return {
-                    'name': 'read_file',
-                    'params': {'file_identifier': file_ref}
+                    'name': 'write_file',
+                    'params': self._extractors.extract_write_params(query)
                 }
         
-        # File search
-        if self._is_file_search_request(query_lower):
-            search_term = self._extractors.extract_search_term(query)
-            if search_term:
-                return {'name': 'search_files', 'params': {'query': search_term}}
-        
-        # List directory
-        if self._is_list_request(query_lower):
-            directory = self._extractors.extract_directory(query)
-            return {'name': 'list_files', 'params': {'directory': directory or '.'}}
-        
-        return None
-    
-    def _is_document_request(self, query: str) -> bool:
-        action_words = ['create', 'build', 'generate', 'make']
-        doc_words = ['document', 'word', 'powerpoint', 'presentation', 'pdf', 'ppt', 'docx']
-        return any(w in query for w in action_words) and any(w in query for w in doc_words)
-    
-    def _is_file_read_request(self, query: str) -> bool:
-        read_words = ['read', 'show', 'open', 'view', 'display', 'cat']
-        return any(w in query for w in read_words) and ('file' in query or self._has_file_extension(query))
-    
-    def _is_file_search_request(self, query: str) -> bool:
-        return any(p in query for p in ['find file', 'search file', 'locate file', 'look for'])
-    
-    def _is_list_request(self, query: str) -> bool:
-        return any(p in query for p in ['list files', 'show files', 'files in'])
-    
-    def _has_file_extension(self, query: str) -> bool:
-        return bool(re.search(r'\.\w{2,4}\b', query))
-    
-    def _validate_file_reference(self, file_ref: str) -> bool:
-        if not file_ref:
-            return False
-        stop_words = {'me', 'the', 'of', 'file', 'contents', 'content'}
-        if file_ref.lower() in stop_words:
-            return False
-        return 2 <= len(file_ref) <= 500
-
-
-class ParameterExtractors:
-    """Utility class for extracting parameters from queries."""
-    
-    def extract_document_request(self, query: str) -> tuple:
-        """Extract document type, title, and description."""
-        query_lower = query.lower()
-        
-        doc_types = {
-            'word': 'docx', 'doc': 'docx', 'docx': 'docx',
-            'powerpoint': 'pptx', 'ppt': 'pptx', 'pptx': 'pptx',
-            'presentation': 'pptx', 'pdf': 'pdf',
-            'text': 'txt', 'markdown': 'md'
-        }
-        
-        doc_type = None
-        for keyword, file_type in doc_types.items():
-            if keyword in query_lower:
-                doc_type = file_type
-                break
-        
-        if not doc_type:
-            return None, None, None
-        
-        title = self._extract_title(query_lower)
-        return doc_type, title, query
-    
-    def _extract_title(self, query: str) -> Optional[str]:
-        patterns = [
-            r'(?:about|regarding|on)\s+(.+?)(?:\s+with|\s+that|\s*$)',
-            r'(?:build|create|generate|make)\s+(?:a|an)?\s+\w+\s+(.+?)(?:\s+with|\s*$)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, query)
-            if match:
-                return match.group(1).strip()
-        return None
-    
-    def extract_file_reference(self, query: str) -> Optional[str]:
-        """Extract file path or name from query."""
-        query_clean = re.sub(
-            r'^(please\s+|could\s+you\s+|can\s+you\s+|would\s+you\s+)', 
-            '', query, flags=re.IGNORECASE
-        )
-        
-        patterns = [
-            (r'(?:show|display)\s+(?:me\s+)?(?:all\s+)?(?:the\s+)?(?:contents?\s+)?'
-             r'(?:of\s+)?(?:the\s+)?(?:file\s+)?(?:called\s+)?(?:named\s+)?'
-             r'([^\s,]+(?:\.\w+)?)', 1),
-            (r'(?:read|open|view|cat)\s+(?:the\s+)?(?:file\s+)?([^\s,]+(?:\.\w+)?)', 1),
-            (r'contents?\s+(?:of\s+)?([^\s,]+(?:\.\w+)?)', 1),
-            (r'([^\s/\\]+\.\w{2,4})\s*$', 1),
+        # =========================================================================
+        # 5. DOCUMENT GENERATION PATTERNS
+        # =========================================================================
+        doc_patterns = [
+            r'(?:generate|create|make)\s+(?:a\s+)?(?:word|pdf|powerpoint|pptx?|docx?)',
+            r'(?:generate|create|make)\s+(?:a\s+)?document',
+            r'(?:generate|create|make)\s+(?:a\s+)?presentation',
+            r'(?:generate|create|make)\s+(?:a\s+)?report',
         ]
         
-        stop_words = {'all', 'the', 'of', 'me', 'contents', 'content', 'file'}
+        for pattern in doc_patterns:
+            if re.search(pattern, query_lower):
+                return {
+                    'name': 'generate_document',
+                    'params': self._extractors.extract_document_params(query)
+                }
         
-        for pattern, group in patterns:
-            match = re.search(pattern, query_clean, re.IGNORECASE)
-            if match:
-                candidate = match.group(group).strip('.,!?')
-                if candidate.lower() not in stop_words:
-                    return candidate
+        # =========================================================================
+        # 6. COMMAND EXECUTION PATTERNS
+        # =========================================================================
+        command_patterns = [
+            r'run\s+(?:the\s+)?command',
+            r'execute\s+',
+            r'shell\s+command',
+        ]
+        
+        for pattern in command_patterns:
+            if re.search(pattern, query_lower):
+                command = self._extractors.extract_command(query)
+                if command:
+                    return {
+                        'name': 'execute_command', 
+                        'params': {'command': command}
+                    }
         
         return None
-    
-    def extract_search_term(self, query: str) -> Optional[str]:
-        match = re.search(r'(?:find|search|locate|look for)\s+(?:file\s+)?(.+)', 
-                         query, re.IGNORECASE)
-        return match.group(1).strip() if match else None
-    
-    def extract_directory(self, query: str) -> Optional[str]:
-        match = re.search(r'(?:in|from)\s+([^\s]+)', query, re.IGNORECASE)
-        return match.group(1) if match else None
 
 
 class LLMDecisionMaker(DecisionMaker):
-    """Decision maker with LLM fallback for complex cases."""
+    """
+    LLM-based decision maker for complex queries.
+    Falls back to SimpleDecisionMaker for efficiency.
+    """
     
-    def __init__(self, simple_maker: SimpleDecisionMaker, llm_provider=None):
-        self.simple_maker = simple_maker
-        self.llm_provider = llm_provider
+    def __init__(self, llm_provider, tools: Optional[Dict[str, Tool]] = None):
+        self.llm = llm_provider
+        self.tools = tools or {}
+        self._simple_maker = SimpleDecisionMaker(tools)
     
     def decide(self, context: Context, intent: Intent) -> Decision:
-        decision = self.simple_maker.decide(context, intent)
+        """Make decision, using LLM for complex cases."""
+        # First try simple rules
+        simple_decision = self._simple_maker.decide(context, intent)
         
-        if intent == Intent.ACTION and not decision.use_tool and self.llm_provider:
-            decision = self._decide_with_llm(context, intent, decision)
+        # If simple rules found a tool, use that
+        if simple_decision.use_tool:
+            return simple_decision
         
-        return decision
-    
-    def _decide_with_llm(self, context: Context, intent: Intent, 
-                        initial: Decision) -> Decision:
-        return initial
+        # For complex queries, could use LLM to determine tool
+        # For now, return simple decision
+        return simple_decision
