@@ -44,8 +44,9 @@ class ConfigField:
 @dataclass
 class LLMSettings:
     """Language model settings."""
-    model_name: str = "meta-llama/Llama-3.2-3B-Instruct"
-    max_new_tokens: int = 2048
+    model_name: str = "./offline_models/qwen3-4b"  # ← New default
+    max_new_tokens: int = 512  # ← New default
+    trust_remote_code: bool = True
     temperature: float = 0.7
     top_p: float = 0.9
     repetition_penalty: float = 1.1
@@ -63,7 +64,7 @@ class LLMSettings:
     def get_field_metadata(cls) -> List[ConfigField]:
         return [
             ConfigField("model_name", ConfigCategory.LLM,
-                       "HuggingFace model path", "str", "meta-llama/Llama-3.2-3B-Instruct",
+                       "HuggingFace model path", "str", "./offline_models/qwen3-4b",
                        requires_restart=True),
             ConfigField("max_new_tokens", ConfigCategory.LLM,
                        "Maximum tokens to generate", "int", 2048, 1, 4096),

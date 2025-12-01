@@ -58,7 +58,6 @@ class BaseLLMProvider(LLMProvider):
         """Generation implementation - override in subclasses."""
         pass
 
-
 class LocalModelProvider(BaseLLMProvider):
     """Provider for local Hugging Face models."""
     
@@ -68,6 +67,7 @@ class LocalModelProvider(BaseLLMProvider):
         
         logger.info(f"Loading local model: {self.config.model_name}")
         
+        # Check cache
         cached = model_manager.db.get_cached_model(self.config.model_name)
         if cached:
             self.model = cached["model"]
@@ -77,18 +77,21 @@ class LocalModelProvider(BaseLLMProvider):
         
         device = self._get_device()
         
+        # CRITICAL: This works with BOTH HuggingFace paths and local directories
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.config.model_name,
+            self.config.model_name,  # ← "./offline_models/qwen3-4b" works here!
             trust_remote_code=True
         )
         
         model_kwargs = self._get_model_kwargs(device)
         
+        # CRITICAL: This also works with BOTH remote and local paths
         self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
+            self.config.model_name,  # ← "./offline_models/qwen3-4b" works here!
             **model_kwargs
         )
         
+        # Cache for reuse
         model_manager.db.cache_model(
             self.config.model_name,
             {"model": self.model, "tokenizer": self.tokenizer}
@@ -145,13 +148,11 @@ class LocalModelProvider(BaseLLMProvider):
         
         if outputs and len(outputs) > 0:
             generated_text = outputs[0]["generated_text"]
-            
             if generated_text.startswith(prompt):
                 return generated_text[len(prompt):].strip()
             return generated_text.strip()
         
         return ""
-
 
 class MockLLMProvider(BaseLLMProvider):
     """Mock provider for testing."""

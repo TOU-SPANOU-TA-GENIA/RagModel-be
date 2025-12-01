@@ -22,3 +22,14 @@ outputs/_healthy eating guide_ covering breakfast ideas, lunch options, dinner r
 outputs/windows basics.pptx
 outputs/python basics.docx
 data/app.db
+offline_models/qwen3-4b/generation_config.json
+offline_models/qwen3-4b/LICENSE
+offline_models/qwen3-4b/merges.txt
+offline_models/qwen3-4b/model-00001-of-00003.safetensors
+offline_models/qwen3-4b/model-00002-of-00003.safetensors
+offline_models/qwen3-4b/model-00003-of-00003.safetensors
+offline_models/qwen3-4b/model.safetensors.index.json
+offline_models/qwen3-4b/README.md
+offline_models/qwen3-4b/tokenizer_config.json
+offline_models/qwen3-4b/tokenizer.json
+offline_models/qwen3-4b/vocab.json

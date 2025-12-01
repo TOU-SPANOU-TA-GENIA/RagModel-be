@@ -108,7 +108,7 @@ class TestLLMPerformance:
         from app.config import LLMConfig
         
         config = LLMConfig(
-            model_name="meta-llama/Llama-3.2-3B-Instruct",
+            model_name="./offline_models/qwen3-4b",
             max_tokens=50,
             quantization="4bit"
         )
