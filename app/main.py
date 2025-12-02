@@ -1,16 +1,18 @@
 # app/main.py
 """
-FastAPI application entry point with authentication and network filesystem support.
-Integrates all routes, middleware, and lifecycle management.
+FastAPI application entry point with authentication, streaming, and Greek language support.
+FIXED: Network file indexing now properly triggers RAG ingestion.
 """
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, status
-from fastapi.responses import FileResponse, JSONResponse
+import asyncio
+import json
+from fastapi import FastAPI, HTTPException, status, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
-from typing import Optional
 from contextlib import asynccontextmanager
-import mimetypes
+from typing import Optional
+from pydantic import BaseModel
+from pathlib import Path
 
 # Import API routers
 from app.api import config_router
@@ -18,25 +20,13 @@ from app.api.auth_routes import router as auth_router
 from app.api.chat_routes_authenticated import router as chat_router
 
 # Import models
-from app.api import (
-    NewChatRequest, MessageRequest,
-    ChatSummary, ChatDetail, SourceDocument,
-    AgentResponse, UploadResponse, IngestionResponse,
-    HealthResponse, StatsResponse
-)
+from app.api import HealthResponse
 
 # Import configuration
-from app.config import (
-    SERVER, PATHS, AGENT,
-    SYSTEM_INSTRUCTION, config
-)
+from app.config import SERVER, PATHS, config
 
 # Import core modules
-from app.core import (
-    startup_manager,
-    ChatNotFoundException,
-    RAGException
-)
+from app.core import startup_manager, ChatNotFoundException, RAGException
 
 # Import database initialization
 from app.db.init_db import init_database
@@ -63,21 +53,17 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing database...")
         init_database()
         
-        # ========== NETWORK FILESYSTEM INITIALIZATION ==========
+        # ========== NETWORK FILESYSTEM + RAG INITIALIZATION ==========
         logger.info("Initializing network filesystem...")
         try:
             from app.core.network_filesystem import initialize_network_monitor, NetworkShare
             from app.core.network_rag_integration import initialize_network_rag
             from app.rag.ingestion import ingest_file
-            from pathlib import Path
             
-            # Get network filesystem configuration
             network_config = config.get_section('network_filesystem')
             
             if network_config and network_config.get('enabled'):
                 shares = []
-                
-                # Parse shares from config
                 for share_data in network_config.get('shares', []):
                     if share_data.get('enabled'):
                         share = NetworkShare(
@@ -100,11 +86,9 @@ async def lifespan(app: FastAPI):
                     monitor = initialize_network_monitor(shares)
                     logger.info(f"✅ Network monitoring initialized for {len(shares)} shares")
                     
-                    # Initialize RAG integration
+                    # Initialize RAG integration with ingestion function
                     if network_config.get('auto_start_monitoring', True):
                         integrator = initialize_network_rag(monitor, ingest_file)
-                        integrator.start()
-                        logger.info("✅ Network-RAG integration started")
                         
                         # Trigger initial scan
                         logger.info("🔍 Starting initial file discovery...")
@@ -112,9 +96,20 @@ async def lifespan(app: FastAPI):
                         stats = monitor.get_stats()
                         logger.info(f"📊 Discovery complete: {stats['total_files']} files found")
                         
-                        # Show files by share
                         for share_name, count in stats['by_share'].items():
                             logger.info(f"   - {share_name}: {count} files")
+                        
+                        # CRITICAL: Index files NOW before starting background thread
+                        logger.info("📥 Starting initial RAG indexing...")
+                        index_result = integrator.index_all_now()
+                        if index_result.get("success"):
+                            logger.info(f"✅ Indexed {index_result['files_indexed']} files into RAG")
+                        else:
+                            logger.warning(f"⚠️ Indexing issue: {index_result.get('message')}")
+                        
+                        # Start background monitoring
+                        integrator.start()
+                        logger.info("✅ Network-RAG integration started")
                     else:
                         logger.info("Auto-start monitoring disabled")
                 else:
@@ -126,17 +121,20 @@ async def lifespan(app: FastAPI):
             logger.error(f"Network filesystem initialization failed: {e}")
             import traceback
             traceback.print_exc()
-        # ========== END NETWORK FILESYSTEM INITIALIZATION ==========
+        # ========== END NETWORK FILESYSTEM ==========
         
-        # Initialize system (RAG, models, etc.)
+        # Initialize system (Agent, Models, etc.)
         logger.info("Initializing system components...")
         await startup_manager.initialize_system()
         
         logger.info("✅ Application ready")
-        from pathlib import Path
+        logger.info(f"   Language: Greek (Ελληνικά)")
+        logger.info(f"   Streaming: Enabled")
+        logger.info(f"   Thinking tags: Enabled")
+        
         db_path = Path(PATHS.data_dir) / 'app.db'
         logger.info(f"   Database: SQLite at {db_path}")
-        logger.info(f"   Redis: {'✅ Connected' if storage.redis_available else '⚠️  Not available (running without cache)'}")
+        logger.info(f"   Redis: {'✅ Connected' if storage.redis_available else '⚠️  Not available'}")
         
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
@@ -146,23 +144,18 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     try:
-        # Stop network monitoring
         logger.info("Stopping network monitoring...")
         try:
             from app.core.network_rag_integration import get_network_integrator
             integrator = get_network_integrator()
             if integrator:
                 integrator.stop()
-                logger.info("Network monitoring stopped")
         except Exception as e:
-            logger.error(f"Error stopping network monitoring: {e}")
+            logger.debug(f"Network cleanup: {e}")
         
-        # Save configuration
-        from app.config import config_manager
-        config_manager.save()
-        logger.info("Configuration saved")
+        logger.info("Shutdown complete")
     except Exception as e:
-        logger.warning(f"Shutdown cleanup failed: {e}")
+        logger.warning(f"Shutdown cleanup: {e}")
     
     logger.info("🛑 Shutting down...")
 
@@ -172,13 +165,14 @@ async def lifespan(app: FastAPI):
 # =============================================================================
 
 app = FastAPI(
-    title="RagModel-be with Authentication",
-    description="AI Agent API with RAG capabilities, user authentication, and persistent chat storage",
-    version="2.0.0",
+    title="RagModel-be API",
+    description="AI Agent API με υποστήριξη Ελληνικών, RAG, και streaming responses",
+    version="2.1.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
 
 # =============================================================================
 # CORS Middleware
@@ -186,24 +180,180 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=SERVER.cors_origins,  # Update in production
+    allow_origins=SERVER.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 # =============================================================================
 # Include Routers
 # =============================================================================
 
-# Authentication routes
 app.include_router(auth_router)
-
-# Chat routes (authenticated)
 app.include_router(chat_router)
-
-# Configuration routes
 app.include_router(config_router)
+
+
+# =============================================================================
+# Streaming Endpoints
+# =============================================================================
+
+class StreamingChatRequest(BaseModel):
+    """Request for streaming chat."""
+    content: str
+    chat_id: Optional[str] = None
+    include_thinking: bool = False
+
+
+async def generate_streaming_response(
+    content: str,
+    chat_id: Optional[str] = None,
+    include_thinking: bool = False
+):
+    """Async generator for streaming SSE responses."""
+    from app.agent.integration import get_agent
+    from app.core.interfaces import Context
+    
+    try:
+        agent = get_agent()
+        
+        # Build context with all required arguments
+        context = Context(
+            query=content,
+            chat_history=[],
+            metadata={"chat_id": chat_id},
+            debug_info=[]
+        )
+        
+        # Run preprocessing (intent, RAG, tools)
+        context = agent.run_preprocessing(context)
+        prompt = context.metadata.get("prompt", content)
+        
+        # Get LLM provider
+        llm = agent.llm_provider
+        
+        # Check if provider supports streaming
+        if hasattr(llm, 'generate_stream'):
+            async for event in llm.generate_stream(prompt, include_thinking=include_thinking):
+                yield f"data: {json.dumps({'type': event.event_type.value, 'data': event.data}, ensure_ascii=False)}\n\n"
+        else:
+            # Fallback: generate full response and yield in chunks
+            from app.config import LLM
+            response = llm.generate(prompt, max_new_tokens=LLM.max_new_tokens)
+            
+            # Clean response
+            from app.agent.orchestrator import ResponseCleaner
+            thinking, clean_response = ResponseCleaner.extract_thinking(response)
+            
+            if include_thinking and thinking:
+                yield f"data: {json.dumps({'type': 'thinking_start', 'data': ''}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'token', 'data': thinking}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'thinking_end', 'data': ''}, ensure_ascii=False)}\n\n"
+            
+            yield f"data: {json.dumps({'type': 'response_start', 'data': ''}, ensure_ascii=False)}\n\n"
+            
+            # Yield response in chunks
+            chunk_size = 20
+            for i in range(0, len(clean_response), chunk_size):
+                chunk = clean_response[i:i+chunk_size]
+                yield f"data: {json.dumps({'type': 'token', 'data': chunk}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.01)
+            
+            yield f"data: {json.dumps({'type': 'response_end', 'data': ''}, ensure_ascii=False)}\n\n"
+        
+        yield f"data: {json.dumps({'type': 'done', 'data': ''}, ensure_ascii=False)}\n\n"
+        
+    except Exception as e:
+        logger.error(f"Streaming error: {e}")
+        yield f"data: {json.dumps({'type': 'error', 'data': str(e)}, ensure_ascii=False)}\n\n"
+
+
+@app.post("/stream/chat")
+async def stream_chat_post(request: StreamingChatRequest):
+    """Stream chat response using Server-Sent Events (SSE)."""
+    return StreamingResponse(
+        generate_streaming_response(
+            content=request.content,
+            chat_id=request.chat_id,
+            include_thinking=request.include_thinking
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+@app.get("/stream/chat")
+async def stream_chat_get(
+    content: str = Query(..., description="Message content"),
+    chat_id: Optional[str] = Query(None, description="Chat ID"),
+    include_thinking: bool = Query(False, description="Include thinking in stream")
+):
+    """Stream chat using GET (for EventSource API)."""
+    return StreamingResponse(
+        generate_streaming_response(
+            content=content,
+            chat_id=chat_id,
+            include_thinking=include_thinking
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+# =============================================================================
+# RAG Status Endpoint
+# =============================================================================
+
+@app.get("/rag/status")
+async def get_rag_status():
+    """Get RAG indexing status."""
+    try:
+        from app.core.network_rag_integration import get_network_integrator
+        from app.core.network_filesystem import get_network_monitor
+        
+        integrator = get_network_integrator()
+        monitor = get_network_monitor()
+        
+        if not integrator or not monitor:
+            return {"status": "not_initialized", "message": "Network RAG not initialized"}
+        
+        status = integrator.get_status()
+        return {
+            "status": "active",
+            "total_network_files": status["total_network_files"],
+            "indexed_files": status["indexed_files"],
+            "pending_files": status["pending_files"],
+            "shares": status["shares"],
+            "auto_indexing": status["auto_indexing_active"]
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/rag/reindex")
+async def trigger_reindex():
+    """Manually trigger RAG reindexing of network files."""
+    try:
+        from app.core.network_rag_integration import get_network_integrator
+        
+        integrator = get_network_integrator()
+        if not integrator:
+            raise HTTPException(status_code=503, detail="Network RAG not initialized")
+        
+        result = integrator.index_all_now()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================
@@ -215,7 +365,7 @@ async def chat_not_found_handler(request, exc):
     """Handle chat not found errors."""
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
-        content={"error": "Chat not found", "detail": str(exc)}
+        content={"error": "Η συνομιλία δεν βρέθηκε", "detail": str(exc)}
     )
 
 
@@ -224,7 +374,7 @@ async def rag_exception_handler(request, exc):
     """Handle RAG system errors."""
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"error": "System error", "detail": str(exc)}
+        content={"error": "Σφάλμα συστήματος", "detail": str(exc)}
     )
 
 
@@ -237,146 +387,57 @@ async def root():
     """Root endpoint - API information."""
     return {
         "name": "RagModel-be API",
-        "version": "2.0.0",
+        "version": "2.1.0",
+        "language": "Greek (Ελληνικά)",
         "status": "running",
         "features": {
             "authentication": True,
             "chat_persistence": True,
             "rag": True,
-            "file_operations": True,
+            "streaming": True,
+            "thinking_tags": True,
+            "greek_language": True,
             "network_filesystem": True
         },
         "endpoints": {
             "auth": "/auth",
             "chats": "/chats",
+            "stream": "/stream/chat",
             "config": "/config",
+            "rag_status": "/rag/status",
             "docs": "/docs",
             "health": "/health"
         }
     }
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    from app.db.storage import storage
-    
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "services": {
-            "database": "sqlite",
-            "database_available": True,
-            "redis_cache": storage.redis_available,
-            "agent": AGENT.mode
-        }
-    }
-    
-    # Check if we can access the database
-    try:
-        import sqlite3
-        from pathlib import Path
-        db_path = Path(PATHS.data_dir) / "app.db"
-        conn = sqlite3.connect(db_path)
-        conn.execute("SELECT 1")
-        conn.close()
-        health_status["services"]["database_status"] = "operational"
-    except Exception as e:
-        health_status["services"]["database_status"] = f"error: {str(e)}"
-        health_status["status"] = "degraded"
-    
-    # Check network filesystem status
+    # Get RAG status
+    rag_status = "unknown"
     try:
         from app.core.network_rag_integration import get_network_integrator
         integrator = get_network_integrator()
         if integrator:
-            nfs_status = integrator.get_status()
-            health_status["services"]["network_filesystem"] = {
-                "enabled": True,
-                "total_files": nfs_status.get("total_network_files", 0),
-                "indexed_files": nfs_status.get("indexed_files", 0),
-                "pending_files": nfs_status.get("pending_files", 0)
-            }
-        else:
-            health_status["services"]["network_filesystem"] = {"enabled": False}
-    except Exception as e:
-        health_status["services"]["network_filesystem"] = {"enabled": False, "error": str(e)}
-    
-    return health_status
-
-
-@app.get("/startup-status")
-async def get_startup_status():
-    """Check startup status and system readiness."""
-    status_info = startup_manager.get_status()
-    
-    from pathlib import Path
-    db_path = Path(PATHS.data_dir) / "app.db"
-    
-    return {
-        "startup_complete": status_info.get("complete", False),
-        "components": status_info.get("components", {}),
-        "errors": status_info.get("errors", []),
-        "auth_enabled": True,
-        "database": {
-            "type": "sqlite",
-            "path": str(db_path),
-            "cache": "redis" if storage.redis_available else "none"
-        }
-    }
-
-
-@app.get("/stats", response_model=StatsResponse)
-async def get_stats():
-    """Get system statistics."""
-    from pathlib import Path
-    
-    stats = {
-        "uptime_seconds": None,
-        "total_chats": 0,
-        "total_messages": 0,
-        "storage": {
-            "database": "sqlite",
-            "cache": "redis" if storage.redis_available else "none"
-        }
-    }
-    
-    # Get startup time
-    if startup_manager.start_time:
-        import time
-        stats["uptime_seconds"] = int(time.time() - startup_manager.start_time)
-    
-    # Get chat/message counts from database
-    try:
-        import sqlite3
-        db_path = Path(PATHS.data_dir) / "app.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Count chats
-        cursor.execute("SELECT COUNT(*) FROM chats")
-        stats["total_chats"] = cursor.fetchone()[0]
-        
-        # Count messages
-        cursor.execute("SELECT COUNT(*) FROM messages")
-        stats["total_messages"] = cursor.fetchone()[0]
-        
-        conn.close()
-    except Exception as e:
-        logger.error(f"Error getting stats: {e}")
-    
-    # Get network filesystem stats
-    try:
-        from app.core.network_rag_integration import get_network_integrator
-        integrator = get_network_integrator()
-        if integrator:
-            nfs_status = integrator.get_status()
-            stats["network_filesystem"] = nfs_status
-    except Exception:
+            status_info = integrator.get_status()
+            rag_status = f"{status_info['indexed_files']}/{status_info['total_network_files']} files indexed"
+    except:
         pass
     
-    return stats
+    return {
+        "status": "healthy",
+        "database": "sqlite",
+        "redis_available": storage.redis_available,
+        "language": "Greek",
+        "streaming": True,
+        "rag_status": rag_status
+    }
 
+
+# =============================================================================
+# Entry Point
+# =============================================================================
 
 if __name__ == "__main__":
     import uvicorn

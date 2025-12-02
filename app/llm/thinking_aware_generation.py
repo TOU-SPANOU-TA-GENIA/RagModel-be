@@ -6,7 +6,7 @@ Combines internal reasoning with response generation in a single pipeline step.
 
 from typing import Optional
 from app.core.interfaces import PipelineStep, Context, LLMProvider
-from app.llm.response_cleaner import clean_response
+from app.llm.enhanced_response_cleaner import clean_response
 from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)

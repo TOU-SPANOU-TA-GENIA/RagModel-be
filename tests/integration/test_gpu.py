@@ -109,7 +109,7 @@ class TestLLMPerformance:
         
         config = LLMConfig(
             model_name="./offline_models/qwen3-4b",
-            max_tokens=50,
+            max_tokens=10000,
             quantization="4bit"
         )
         

@@ -232,7 +232,7 @@ def clean_response(response: str) -> str:
     Uses enhanced cleaner for better thinking removal.
     
     Usage:
-        from app.llm.response_cleaner import clean_response
+        from app.llm.enhanced_response_cleaner import clean_response
         
         raw_response = llm.generate(prompt)
         clean = clean_response(raw_response)

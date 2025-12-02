@@ -1,7 +1,7 @@
 {
   "llm": {
     "model_name": "./offline_models/qwen3-4b",
-    "max_new_tokens": 512,
+    "max_new_tokens": 2048,
     "trust_remote_code": true,
     "temperature": 0.7,
     "top_p": 0.9,
@@ -10,15 +10,11 @@
     "quantization": "4bit",
     "device": "auto",
     "prewarm_enabled": true,
-    "prewarm_prompts": [
-      "Hello",
-      "Hi",
-      "Hey"
-    ],
+    "prewarm_prompts": ["Hello", "Hi", "Hey"],
     "prewarm_delay": 0.5
   },
   "embedding": {
-    "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     "dimension": 384,
     "normalize": true,
     "batch_size": 32,
@@ -42,37 +38,18 @@
     "action_keyword_weight": 1.5,
     "question_keyword_weight": 1.0,
     "conversation_keyword_weight": 0.5,
-    "min_confidence_threshold": 0.5
+    "min_confidence_threshold": 0.5,
+    "enable_thinking": true,
+    "language": "greek"
   },
   "tools": {
     "max_file_size_mb": 10,
     "allowed_extensions": [
-      ".txt",
-      ".md",
-      ".text",
-      ".json",
-      ".yaml",
-      ".yml",
-      ".conf",
-      ".config",
-      ".cfg",
-      ".log",
-      ".py",
-      ".sh",
-      ".bash",
-      ".xml",
-      ".html",
-      ".csv"
+      ".txt", ".md", ".text", ".json", ".yaml", ".yml",
+      ".conf", ".config", ".cfg", ".log", ".py", ".sh",
+      ".bash", ".xml", ".html", ".csv"
     ],
-    "allowed_commands": [
-      "ls",
-      "pwd",
-      "echo",
-      "date",
-      "whoami",
-      "df",
-      "free"
-    ],
+    "allowed_commands": ["ls", "pwd", "echo", "date", "whoami", "df", "free"],
     "show_file_content": true,
     "file_content_format": "pretty",
     "max_content_display_lines": null
@@ -87,10 +64,7 @@
   "server": {
     "host": "localhost",
     "port": 8000,
-    "cors_origins": [
-      "http://localhost:4200",
-      "http://127.0.0.1:4200"
-    ],
+    "cors_origins": ["http://localhost:4200", "http://127.0.0.1:4200"],
     "log_level": "INFO",
     "log_format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   },
@@ -103,23 +77,27 @@
     "offline_models_dir": "offline_models"
   },
   "documents": {
-    "default_font": "Arial",
+    "default_font_family": "Arial",
     "default_font_size": 11,
-    "title_font_size": 24,
-    "heading1_font_size": 18,
-    "heading2_font_size": 14,
-    "max_filename_length": 200
+    "default_heading_size": 14,
+    "default_margin_inches": 1.0,
+    "include_metadata": true,
+    "timestamp_format": "%Y-%m-%d %H:%M:%S"
   },
   "response": {
+    "clean_thinking_tags": true,
     "clean_xml_tags": true,
     "clean_meta_commentary": true,
-    "clean_reasoning_markers": true,
     "normalize_whitespace": true,
-    "max_response_length": 2000
+    "max_response_length": null,
+    "language": "greek"
   },
   "network_filesystem": {
     "enabled": true,
+    "auto_index": true,
     "auto_start_monitoring": true,
+    "index_interval": 300,
+    "file_extensions": [".txt", ".md", ".pdf", ".docx"],
     "shares": [
       {
         "name": "shared_docs",
@@ -159,5 +137,13 @@
         "max_file_size_mb": 100
       }
     ]
+  },
+  "streaming": {
+    "enabled": true,
+    "chunk_delay_ms": 20
+  },
+  "localization": {
+    "default_language": "greek",
+    "force_greek_responses": true
   }
 }

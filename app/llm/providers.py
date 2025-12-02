@@ -14,7 +14,8 @@ from app.llm.prompt_builders import (
     SimplePromptBuilder,
     ToolAwarePromptBuilder
 )
-from app.llm.response_cleaner import clean_response
+from app.llm.enhanced_response_cleaner import clean_response
+from app.llm.streaming_provider import StreamingLLMProvider
 from app.core.interfaces import LLMProvider, PromptBuilder
 from app.utils.logger import setup_logger
 
@@ -58,6 +59,9 @@ def create_llm_provider(
     elif provider_type == "prewarmed":
         from app.llm.prewarmed_provider import prewarmed_llm
         return prewarmed_llm
+    elif provider_type == "streaming":
+        from app.llm.streaming_provider import create_streaming_provider
+        return create_streaming_provider(config)
     else:
         raise ValueError(f"Unknown provider type: {provider_type}")
     
