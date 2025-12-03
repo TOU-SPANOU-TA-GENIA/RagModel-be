@@ -1,663 +1,444 @@
 # tests/cli/authenticated_chat_client.py
 """
-Authenticated Chat Client - Full featured CLI for testing the authenticated API.
-Supports login, registration, chat management, conversations, and streaming.
+Authenticated Chat Client with TRUE real-time streaming.
 
-Updated with:
-- Real-time streaming support
-- Greek language UI
-- Thinking display option
+Features:
+- No timeout (waits for complete response)
+- Shows status updates (searching, generating)
+- Real token-by-token display
+- Number-based chat operations
+- Configurable max_tokens
 """
 
 import requests
 import json
-import os
-import sys
 from typing import Optional, Dict, List
-from datetime import datetime
 from pathlib import Path
 
 
 class Colors:
-    """ANSI color codes for terminal output."""
     GREEN = '\033[92m'
     BLUE = '\033[94m'
     YELLOW = '\033[93m'
     RED = '\033[91m'
     CYAN = '\033[96m'
-    MAGENTA = '\033[95m'
     GRAY = '\033[90m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
     END = '\033[0m'
 
 
-def print_colored(text: str, color: str = ""):
-    """Print colored text."""
-    print(f"{color}{text}{Colors.END}")
+def cprint(text: str, color: str = "", end: str = "\n"):
+    print(f"{color}{text}{Colors.END}", end=end, flush=True)
 
 
 class AuthenticatedChatClient:
-    """Client for interacting with the authenticated chat API."""
-    
     def __init__(self, base_url: str = "http://localhost:8000"):
         self.base_url = base_url
         self.token: Optional[str] = None
         self.user: Optional[Dict] = None
         self.current_chat_id: Optional[str] = None
         self.current_chat_title: Optional[str] = None
-        self.use_streaming: bool = True  # Enable streaming by default
-        self.show_thinking: bool = False  # Hide thinking by default
+        self.use_streaming: bool = True
+        self.show_thinking: bool = False
+        self.max_tokens: int = 256
+        self._chat_cache: List[Dict] = []
         
-        # Load saved session if exists
         self.session_file = Path("data/.session.json")
         self.load_session()
     
     def save_session(self):
-        """Save current session to file."""
         if self.token and self.user:
-            session_data = {
-                "token": self.token,
-                "user": self.user,
-                "current_chat_id": self.current_chat_id,
-                "current_chat_title": self.current_chat_title,
-                "use_streaming": self.use_streaming,
-                "show_thinking": self.show_thinking
-            }
             self.session_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.session_file, 'w') as f:
-                json.dump(session_data, f)
+                json.dump({
+                    "token": self.token,
+                    "user": self.user,
+                    "current_chat_id": self.current_chat_id,
+                    "current_chat_title": self.current_chat_title,
+                    "use_streaming": self.use_streaming,
+                    "show_thinking": self.show_thinking,
+                    "max_tokens": self.max_tokens
+                }, f)
     
     def load_session(self):
-        """Load saved session from file."""
         if self.session_file.exists():
             try:
                 with open(self.session_file, 'r') as f:
-                    session_data = json.load(f)
-                self.token = session_data.get("token")
-                self.user = session_data.get("user")
-                self.current_chat_id = session_data.get("current_chat_id")
-                self.current_chat_title = session_data.get("current_chat_title")
-                self.use_streaming = session_data.get("use_streaming", True)
-                self.show_thinking = session_data.get("show_thinking", False)
-            except Exception as e:
-                print(f"⚠️  Could not load session: {e}")
+                    d = json.load(f)
+                self.token = d.get("token")
+                self.user = d.get("user")
+                self.current_chat_id = d.get("current_chat_id")
+                self.current_chat_title = d.get("current_chat_title")
+                self.use_streaming = d.get("use_streaming", True)
+                self.show_thinking = d.get("show_thinking", False)
+                self.max_tokens = d.get("max_tokens", 256)
+            except:
+                pass
     
     def clear_session(self):
-        """Clear saved session."""
         if self.session_file.exists():
             self.session_file.unlink()
-        self.token = None
-        self.user = None
-        self.current_chat_id = None
-        self.current_chat_title = None
+        self.token = self.user = self.current_chat_id = self.current_chat_title = None
     
-    def get_headers(self) -> Dict[str, str]:
-        """Get headers with authentication token."""
-        headers = {"Content-Type": "application/json"}
+    def get_headers(self) -> Dict:
+        h = {"Content-Type": "application/json"}
         if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        return headers
+            h["Authorization"] = f"Bearer {self.token}"
+        return h
     
-    # =========================================================================
-    # Authentication
-    # =========================================================================
-    
-    def register(self, username: str, email: str, password: str) -> bool:
-        """Register a new user."""
+    def _refresh_chats(self) -> List[Dict]:
+        if not self.token:
+            return []
         try:
-            response = requests.post(
-                f"{self.base_url}/auth/register",
-                json={
-                    "username": username,
-                    "email": email,
-                    "password": password
-                }
-            )
-            
-            if response.status_code == 201:
-                print_colored("✅ Επιτυχής εγγραφή!", Colors.GREEN)
-                return self.login(username, password)
-            else:
-                error = response.json().get("detail", "Unknown error")
-                print_colored(f"❌ Αποτυχία εγγραφής: {error}", Colors.RED)
-                return False
-        
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα εγγραφής: {e}", Colors.RED)
-            return False
+            r = requests.get(f"{self.base_url}/chats", headers=self.get_headers(), timeout=10)
+            if r.status_code == 200:
+                self._chat_cache = r.json()
+        except:
+            pass
+        return self._chat_cache
     
-    def login(self, username: str, password: str) -> bool:
-        """Login with username and password."""
+    def _get_chat(self, id_or_num: str) -> Optional[Dict]:
+        chats = self._refresh_chats()
+        if id_or_num.isdigit():
+            idx = int(id_or_num) - 1
+            return chats[idx] if 0 <= idx < len(chats) else None
+        for c in chats:
+            if c["id"].startswith(id_or_num):
+                return c
+        return None
+    
+    # === Auth ===
+    def register(self, u, e, p):
         try:
-            response = requests.post(
-                f"{self.base_url}/auth/login",
-                json={
-                    "username": username,
-                    "password": password
-                }
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                self.token = data["access_token"]
-                self.user = data["user"]
+            r = requests.post(f"{self.base_url}/auth/register", json={"username":u,"email":e,"password":p})
+            cprint("✅ Registered!" if r.ok else f"❌ {r.json().get('detail','Error')}", 
+                   Colors.GREEN if r.ok else Colors.RED)
+        except Exception as ex:
+            cprint(f"❌ {ex}", Colors.RED)
+    
+    def login(self, u, p):
+        try:
+            r = requests.post(f"{self.base_url}/auth/login", data={"username":u,"password":p})
+            if r.ok:
+                d = r.json()
+                self.token = d["access_token"]
+                self.user = {"username": u, "id": d.get("user_id")}
                 self.save_session()
-                print_colored(f"✅ Επιτυχής σύνδεση! Καλώς ήρθες, {self.user['username']}!", Colors.GREEN)
-                return True
+                self._refresh_chats()
+                cprint(f"✅ Welcome {u}", Colors.GREEN)
             else:
-                error = response.json().get("detail", "Invalid credentials")
-                print_colored(f"❌ Αποτυχία σύνδεσης: {error}", Colors.RED)
-                return False
-        
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα σύνδεσης: {e}", Colors.RED)
-            return False
+                cprint(f"❌ {r.json().get('detail','Error')}", Colors.RED)
+        except Exception as ex:
+            cprint(f"❌ {ex}", Colors.RED)
     
     def logout(self):
-        """Logout and clear session."""
         self.clear_session()
-        print_colored("✅ Αποσυνδεθήκατε επιτυχώς!", Colors.GREEN)
+        cprint("✅ Logged out", Colors.GREEN)
     
-    def whoami(self):
-        """Display current user info."""
-        if self.user:
-            print(f"\n👤 Χρήστης: {self.user['username']}")
-            print(f"   Email: {self.user['email']}")
-            print(f"   Streaming: {'✅' if self.use_streaming else '❌'}")
-            print(f"   Show thinking: {'✅' if self.show_thinking else '❌'}")
-        else:
-            print("❌ Δεν έχετε συνδεθεί")
-    
-    # =========================================================================
-    # Chat Management
-    # =========================================================================
-    
-    def create_chat(self, title: str = "Νέα Συνομιλία"):
-        """Create a new chat."""
+    # === Chats ===
+    def new_chat(self, title="Νέα Συνομιλία"):
         if not self.token:
-            print_colored("❌ Πρέπει να συνδεθείτε πρώτα", Colors.RED)
-            return
-        
+            return cprint("❌ Login first", Colors.RED)
         try:
-            response = requests.post(
-                f"{self.base_url}/chats/",
-                headers=self.get_headers(),
-                json={"title": title}
-            )
-            
-            if response.status_code == 201:
-                data = response.json()
-                self.current_chat_id = data["id"]
-                self.current_chat_title = data["title"]
+            r = requests.post(f"{self.base_url}/chats", headers=self.get_headers(), json={"title":title})
+            if r.ok:
+                d = r.json()
+                self.current_chat_id = d["id"]
+                self.current_chat_title = d["title"]
                 self.save_session()
-                print_colored(f"✅ Δημιουργήθηκε: \"{self.current_chat_title}\"", Colors.GREEN)
-            else:
-                print_colored(f"❌ Αποτυχία δημιουργίας: {response.status_code}", Colors.RED)
-        
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα: {e}", Colors.RED)
+                cprint(f"✅ {d['title']}", Colors.GREEN)
+        except Exception as ex:
+            cprint(f"❌ {ex}", Colors.RED)
     
     def list_chats(self):
-        """List all chats for current user."""
         if not self.token:
-            print_colored("❌ Πρέπει να συνδεθείτε πρώτα", Colors.RED)
-            return
-        
-        try:
-            response = requests.get(
-                f"{self.base_url}/chats/",
-                headers=self.get_headers()
-            )
-            
-            if response.status_code == 200:
-                chats = response.json()
-                
-                if not chats:
-                    print("\n📭 Δεν υπάρχουν συνομιλίες. Δημιουργήστε μία με 'new'\n")
-                    return
-                
-                print("\n" + "="*50)
-                print_colored("💬 Οι Συνομιλίες σας", Colors.CYAN)
-                print("="*50)
-                
-                for i, chat in enumerate(chats, 1):
-                    marker = "→" if chat["id"] == self.current_chat_id else " "
-                    print(f" {marker} {i}. {chat['title']}")
-                    print(f"      Μηνύματα: {chat['message_count']} | Τελ. ενημέρωση: {chat['updated_at'][:10]}")
-                
-                print("="*50)
-                print("Χρησιμοποιήστε 'select <αριθμός>' για επιλογή\n")
-            else:
-                print_colored(f"❌ Αποτυχία: {response.status_code}", Colors.RED)
-        
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα: {e}", Colors.RED)
+            return cprint("❌ Login first", Colors.RED)
+        chats = self._refresh_chats()
+        if not chats:
+            return print("📭 No chats")
+        cprint("\n📋 Chats:", Colors.CYAN)
+        for i, c in enumerate(chats, 1):
+            m = "→" if c["id"] == self.current_chat_id else " "
+            print(f" {m} {i}. {c['title'][:40]} ({c.get('message_count',0)})")
     
-    def select_chat(self, identifier: str):
-        """Select a chat by index or ID."""
-        if not self.token:
-            print_colored("❌ Πρέπει να συνδεθείτε πρώτα", Colors.RED)
-            return
-        
-        try:
-            # Get chat list
-            response = requests.get(
-                f"{self.base_url}/chats/",
-                headers=self.get_headers()
-            )
-            
-            if response.status_code != 200:
-                print_colored("❌ Αποτυχία λήψης συνομιλιών", Colors.RED)
-                return
-            
-            chats = response.json()
-            
-            # Try to find chat
-            selected_chat = None
-            
-            if identifier.isdigit():
-                index = int(identifier) - 1
-                if 0 <= index < len(chats):
-                    selected_chat = chats[index]
-            else:
-                for chat in chats:
-                    if chat["id"] == identifier or chat["id"].startswith(identifier):
-                        selected_chat = chat
-                        break
-            
-            if selected_chat:
-                self.current_chat_id = selected_chat["id"]
-                self.current_chat_title = selected_chat["title"]
-                self.save_session()
-                print_colored(f"✅ Επιλέχθηκε: \"{self.current_chat_title}\"", Colors.GREEN)
-            else:
-                print_colored("❌ Η συνομιλία δεν βρέθηκε", Colors.RED)
-        
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα: {e}", Colors.RED)
+    def select_chat(self, x):
+        c = self._get_chat(x)
+        if c:
+            self.current_chat_id = c["id"]
+            self.current_chat_title = c["title"]
+            self.save_session()
+            cprint(f"✅ Selected: {c['title']}", Colors.GREEN)
+        else:
+            cprint(f"❌ Not found: {x}", Colors.RED)
     
-    def delete_chat(self, chat_id: Optional[str] = None):
-        """Delete a chat."""
+    def delete_chat(self, x=None):
         if not self.token:
-            print_colored("❌ Πρέπει να συνδεθείτε πρώτα", Colors.RED)
-            return
+            return cprint("❌ Login first", Colors.RED)
+        if x:
+            c = self._get_chat(x)
+            if not c:
+                return cprint("❌ Not found", Colors.RED)
+            tid, tname = c["id"], c["title"]
+        elif self.current_chat_id:
+            tid, tname = self.current_chat_id, self.current_chat_title
+        else:
+            return cprint("❌ No chat selected", Colors.RED)
         
-        target_id = chat_id or self.current_chat_id
-        if not target_id:
-            print_colored("❌ Δεν υπάρχει επιλεγμένη συνομιλία", Colors.RED)
-            return
+        if input(f"Delete '{tname}'? (y/n): ").lower() != 'y':
+            return print("Cancelled")
         
         try:
-            response = requests.delete(
-                f"{self.base_url}/chats/{target_id}",
-                headers=self.get_headers()
-            )
-            
-            if response.status_code == 204:
-                print_colored("✅ Η συνομιλία διαγράφηκε", Colors.GREEN)
-                if target_id == self.current_chat_id:
-                    self.current_chat_id = None
-                    self.current_chat_title = None
+            r = requests.delete(f"{self.base_url}/chats/{tid}", headers=self.get_headers())
+            if r.status_code in (200, 204):
+                cprint("✅ Deleted", Colors.GREEN)
+                if tid == self.current_chat_id:
+                    self.current_chat_id = self.current_chat_title = None
                     self.save_session()
-            else:
-                print_colored(f"❌ Αποτυχία διαγραφής: {response.status_code}", Colors.RED)
-        
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα: {e}", Colors.RED)
+        except Exception as ex:
+            cprint(f"❌ {ex}", Colors.RED)
     
-    def show_chat_history(self):
-        """Show message history for current chat."""
-        if not self.current_chat_id:
-            print_colored("❌ Δεν υπάρχει επιλεγμένη συνομιλία", Colors.RED)
-            return
-        
-        try:
-            response = requests.get(
-                f"{self.base_url}/chats/{self.current_chat_id}",
-                headers=self.get_headers()
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                chat = data['chat']
-                messages = data['messages']
-                
-                print("\n" + "="*60)
-                print_colored(f"💬 {chat['title']}", Colors.CYAN)
-                print("="*60)
-                
-                if not messages:
-                    print("(Δεν υπάρχουν μηνύματα)")
-                else:
-                    for msg in messages:
-                        role_emoji = "👤" if msg['role'] == 'user' else "🤖"
-                        role_color = Colors.BLUE if msg['role'] == 'user' else Colors.GREEN
-                        timestamp = msg['timestamp'][:19]
-                        print(f"\n{role_emoji} ", end="")
-                        print_colored(f"{msg['role'].upper()} [{timestamp}]", role_color)
-                        print(f"   {msg['content']}")
-                
-                print("="*60 + "\n")
-            else:
-                print_colored(f"❌ Αποτυχία: {response.status_code}", Colors.RED)
-        
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα: {e}", Colors.RED)
-    
-    # =========================================================================
-    # Messaging
-    # =========================================================================
-    
-    def send_message(self, content: str):
-        """Send a message - uses streaming or regular API based on setting."""
+    # === Messaging ===
+    def send(self, msg):
         if not self.token:
-            print_colored("❌ Πρέπει να συνδεθείτε πρώτα", Colors.RED)
-            return
-        
+            return cprint("❌ Login first", Colors.RED)
         if not self.current_chat_id:
-            print_colored("❌ Δεν υπάρχει επιλεγμένη συνομιλία. Δημιουργήστε με 'new'", Colors.RED)
-            return
+            return cprint("❌ Select a chat first (new/select)", Colors.RED)
         
         if self.use_streaming:
-            self._send_message_streaming(content)
+            self._send_streaming(msg)
         else:
-            self._send_message_regular(content)
+            self._send_regular(msg)
     
-    def _send_message_streaming(self, content: str):
-        """Send message with streaming response."""
+    def _send_streaming(self, msg):
+        """TRUE real-time streaming with no timeout."""
         try:
-            print_colored("\n🤖 Απάντηση:", Colors.GREEN)
-            print("   ", end="", flush=True)
-            
-            # Use streaming endpoint
-            response = requests.post(
+            # NO TIMEOUT
+            with requests.post(
                 f"{self.base_url}/stream/chat",
                 json={
-                    "content": content,
+                    "content": msg,
                     "chat_id": self.current_chat_id,
-                    "include_thinking": self.show_thinking
+                    "include_thinking": self.show_thinking,
+                    "max_tokens": self.max_tokens
                 },
                 stream=True,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code != 200:
-                print_colored(f"\n❌ Σφάλμα: {response.status_code}", Colors.RED)
-                return
-            
-            full_response = ""
-            in_thinking = False
-            
-            for line in response.iter_lines():
-                if not line:
-                    continue
+                headers={"Content-Type": "application/json"},
+                timeout=None
+            ) as resp:
                 
-                line_str = line.decode('utf-8')
-                if not line_str.startswith('data: '):
-                    continue
+                if not resp.ok:
+                    return cprint(f"❌ {resp.status_code}", Colors.RED)
                 
-                try:
-                    data = json.loads(line_str[6:])
-                    event_type = data.get('type', '')
-                    event_data = data.get('data', '')
-                    
-                    if event_type == 'thinking_start':
-                        in_thinking = True
-                        if self.show_thinking:
-                            print_colored("\n   [Σκέψη: ", Colors.GRAY, end="")
-                    
-                    elif event_type == 'thinking_end':
-                        in_thinking = False
-                        if self.show_thinking:
-                            print_colored("]", Colors.GRAY)
-                            print("   ", end="", flush=True)
-                    
-                    elif event_type == 'token':
-                        if in_thinking and self.show_thinking:
-                            print_colored(event_data, Colors.GRAY, end="", flush=True)
-                        elif not in_thinking:
-                            print(event_data, end="", flush=True)
-                            full_response += event_data
-                    
-                    elif event_type == 'done':
-                        break
-                    
-                    elif event_type == 'error':
-                        print_colored(f"\n❌ Σφάλμα: {event_data}", Colors.RED)
-                        break
+                buffer = ""
+                in_thinking = False
+                response_started = False
                 
-                except json.JSONDecodeError:
-                    continue
+                for chunk in resp.iter_content(chunk_size=1, decode_unicode=True):
+                    if not chunk:
+                        continue
+                    
+                    buffer += chunk
+                    
+                    while "\n\n" in buffer:
+                        event_str, buffer = buffer.split("\n\n", 1)
+                        
+                        for line in event_str.split("\n"):
+                            if not line.startswith("data: "):
+                                continue
+                            
+                            try:
+                                d = json.loads(line[6:])
+                                evt = d.get('type', '')
+                                data = d.get('data', '')
+                                
+                                # Debug: uncomment to show all events
+                                # print(f"[DEBUG] {evt}: {data[:50] if data else '(empty)'}") 
+                                
+                                if evt == 'status':
+                                    cprint(f"\n{data}", Colors.YELLOW)
+                                
+                                elif evt == 'heartbeat':
+                                    print(".", end="", flush=True)
+                                
+                                elif evt == 'thinking_start':
+                                    in_thinking = True
+                                    if self.show_thinking:
+                                        cprint("\n[Thinking: ", Colors.GRAY, end="")
+                                
+                                elif evt == 'thinking_end':
+                                    in_thinking = False
+                                    if self.show_thinking:
+                                        cprint("]", Colors.GRAY)
+                                
+                                elif evt == 'response_start':
+                                    if not response_started:
+                                        print("\n", end="")
+                                        cprint("🤖 ", Colors.GREEN, end="")
+                                        response_started = True
+                                
+                                elif evt == 'token':
+                                    if in_thinking:
+                                        if self.show_thinking:
+                                            print(data, end="", flush=True)
+                                    else:
+                                        if not response_started:
+                                            cprint("🤖 ", Colors.GREEN, end="")
+                                            response_started = True
+                                        print(data, end="", flush=True)
+                                
+                                elif evt == 'error':
+                                    cprint(f"\n❌ {data}", Colors.RED)
+                            
+                            except json.JSONDecodeError:
+                                continue
             
             print("\n")
             
-            # Save message to chat history via regular API
-            self._save_message_to_chat(content, full_response)
-            
-        except Exception as e:
-            print_colored(f"\n❌ Σφάλμα streaming: {e}", Colors.RED)
-            # Fallback to regular
-            self._send_message_regular(content)
+        except Exception as ex:
+            cprint(f"\n❌ {ex}", Colors.RED)
     
-    def _send_message_regular(self, content: str):
-        """Send message with regular (non-streaming) response."""
+    def _send_regular(self, msg):
         try:
-            print_colored("🤔 Σκέφτομαι...", Colors.YELLOW)
-            
-            response = requests.post(
+            cprint("🤔 ...", Colors.YELLOW)
+            r = requests.post(
                 f"{self.base_url}/chats/{self.current_chat_id}/messages",
                 headers=self.get_headers(),
-                json={"content": content}
+                json={"content": msg},
+                timeout=600
             )
-            
-            if response.status_code == 200:
-                data = response.json()
-                answer = data['answer']
-                
-                print_colored(f"\n🤖 Απάντηση:", Colors.GREEN)
-                print(f"   {answer}\n")
+            if r.ok:
+                cprint(f"\n🤖 {r.json()['answer']}\n", Colors.GREEN)
             else:
-                error = response.json().get("detail", "Unknown error")
-                print_colored(f"❌ Σφάλμα: {error}", Colors.RED)
-        
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα: {e}", Colors.RED)
+                cprint(f"❌ {r.json().get('detail','Error')}", Colors.RED)
+        except Exception as ex:
+            cprint(f"❌ {ex}", Colors.RED)
     
-    def _save_message_to_chat(self, user_content: str, assistant_content: str):
-        """Save streamed messages to chat history."""
-        try:
-            # This is a workaround since streaming doesn't auto-save
-            # You may want to add a dedicated endpoint for this
-            pass
-        except Exception:
-            pass
-    
-    # =========================================================================
-    # Settings
-    # =========================================================================
-    
+    # === Settings ===
     def toggle_streaming(self):
-        """Toggle streaming mode."""
         self.use_streaming = not self.use_streaming
         self.save_session()
-        status = "ενεργό" if self.use_streaming else "ανενεργό"
-        print_colored(f"✅ Streaming: {status}", Colors.GREEN)
+        cprint(f"✅ Streaming: {'ON' if self.use_streaming else 'OFF'}", Colors.GREEN)
     
     def toggle_thinking(self):
-        """Toggle thinking display."""
         self.show_thinking = not self.show_thinking
         self.save_session()
-        status = "ενεργό" if self.show_thinking else "ανενεργό"
-        print_colored(f"✅ Εμφάνιση σκέψης: {status}", Colors.GREEN)
+        cprint(f"✅ Thinking: {'ON' if self.show_thinking else 'OFF'}", Colors.GREEN)
     
-    # =========================================================================
-    # System
-    # =========================================================================
+    def set_max_tokens(self, n: int):
+        self.max_tokens = max(50, min(2048, n))
+        self.save_session()
+        cprint(f"✅ Max tokens: {self.max_tokens}", Colors.GREEN)
+    
+    def show_status(self):
+        cprint(f"\n📊 Status:", Colors.CYAN)
+        print(f"   User: {self.user['username'] if self.user else 'Not logged in'}")
+        print(f"   Chat: {self.current_chat_title or 'None'}")
+        print(f"   Streaming: {'ON' if self.use_streaming else 'OFF'}")
+        print(f"   Thinking: {'ON' if self.show_thinking else 'OFF'}")
+        print(f"   Max tokens: {self.max_tokens}")
     
     def check_health(self):
-        """Check API health."""
         try:
-            response = requests.get(f"{self.base_url}/health")
-            if response.status_code == 200:
-                data = response.json()
-                print_colored(f"\n✅ API Status: {data['status']}", Colors.GREEN)
-                print(f"   Database: {data.get('database', 'unknown')}")
-                print(f"   Redis: {'✅' if data.get('redis_available') else '❌'}")
-                print(f"   Language: {data.get('language', 'unknown')}")
-                print(f"   Streaming: {'✅' if data.get('streaming') else '❌'}")
-            else:
-                print_colored(f"❌ API unhealthy: {response.status_code}", Colors.RED)
-        except Exception as e:
-            print_colored(f"❌ Cannot reach API: {e}", Colors.RED)
-
-
-def print_help():
-    """Print help message in Greek."""
-    print("""
-╔══════════════════════════════════════════════════════════════╗
-║        🤖 AI Chat Client - Εντολές (Commands)                ║
-╚══════════════════════════════════════════════════════════════╝
-
-Αυθεντικοποίηση:
-  register                  - Δημιουργία νέου λογαριασμού
-  login                     - Σύνδεση σε υπάρχοντα λογαριασμό
-  logout                    - Αποσύνδεση
-  whoami                    - Εμφάνιση τρέχοντος χρήστη
-
-Διαχείριση Συνομιλιών:
-  new [τίτλος]             - Δημιουργία νέας συνομιλίας
-  list                     - Λίστα συνομιλιών
-  select <αριθμός|id>      - Επιλογή συνομιλίας
-  delete [id]              - Διαγραφή συνομιλίας
-  history                  - Ιστορικό μηνυμάτων
-
-Μηνύματα:
-  <μήνυμα>                 - Αποστολή μηνύματος (απλά γράψτε)
-
-Ρυθμίσεις:
-  streaming                - Εναλλαγή streaming mode
-  thinking                 - Εναλλαγή εμφάνισης σκέψης
-
-Σύστημα:
-  health                   - Έλεγχος API
-  help                     - Εμφάνιση βοήθειας
-  exit                     - Έξοδος
-
-Παραδείγματα:
-  login                    → Σύνδεση
-  new "Python Help"        → Νέα συνομιλία με τίτλο
-  Γεια σου!                → Αποστολή μηνύματος
-  streaming                → Εναλλαγή real-time streaming
-  
-╚══════════════════════════════════════════════════════════════╝
-    """)
+            r = requests.get(f"{self.base_url}/health", timeout=5)
+            if r.ok:
+                d = r.json()
+                cprint(f"\n✅ API: {d.get('status','ok')}", Colors.GREEN)
+        except Exception as ex:
+            cprint(f"❌ {ex}", Colors.RED)
+    
+    def check_rag(self):
+        try:
+            r = requests.get(f"{self.base_url}/rag/status", timeout=5)
+            if r.ok:
+                d = r.json()
+                cprint(f"\n📚 RAG: {d.get('indexed_files',0)}/{d.get('total_network_files',0)} files", Colors.CYAN)
+        except Exception as ex:
+            cprint(f"❌ {ex}", Colors.RED)
 
 
 def main():
-    """Main interactive loop."""
-    client = AuthenticatedChatClient()
+    c = AuthenticatedChatClient()
     
-    print("╔══════════════════════════════════════════════════════════════╗")
-    print("║       🤖 AI Agent Chat - Διαδραστικό CLI                     ║")
-    print("║       Με υποστήριξη Ελληνικών και Streaming                  ║")
-    print("╚══════════════════════════════════════════════════════════════╝")
+    print("╔════════════════════════════════════════════╗")
+    print("║  🤖 AI Chat - True Real-Time Streaming     ║")
+    print("╚════════════════════════════════════════════╝")
     
-    if client.token:
-        print_colored(f"\n✅ Συνδεδεμένος ως: {client.user['username']}", Colors.GREEN)
-        if client.current_chat_id:
-            print(f"   Τρέχουσα συνομιλία: {client.current_chat_title or client.current_chat_id[:8]}")
-        print(f"   Streaming: {'✅' if client.use_streaming else '❌'}")
-        print("\nΓράψτε 'help' για εντολές\n")
+    if c.user:
+        cprint(f"✅ {c.user['username']}", Colors.GREEN)
+        if c.current_chat_title:
+            print(f"   Chat: {c.current_chat_title}")
     else:
-        print("\n⚠️  Δεν έχετε συνδεθεί. Χρησιμοποιήστε 'login' ή 'register'")
-        print("Γράψτε 'help' για εντολές\n")
+        print("⚠️  Use 'login' or 'register'")
+    
+    print("\nCommands: help, new, list, select N, delete N")
+    print("Settings: streaming, thinking, tokens N, status\n")
     
     while True:
         try:
-            # Build prompt
-            if client.current_chat_id:
-                chat_name = client.current_chat_title or client.current_chat_id[:8]
-                prompt = f"[{client.user['username']}@{chat_name}] > "
-            elif client.user:
-                prompt = f"[{client.user['username']}] > "
+            if c.current_chat_id:
+                p = f"[{c.user['username']}@{c.current_chat_title[:15]}] > "
+            elif c.user:
+                p = f"[{c.user['username']}] > "
             else:
-                prompt = "[guest] > "
+                p = "[guest] > "
             
-            user_input = input(prompt).strip()
-            
-            if not user_input:
+            inp = input(p).strip()
+            if not inp:
                 continue
             
-            # Parse command
-            parts = user_input.split(maxsplit=1)
-            command = parts[0].lower()
-            args = parts[1] if len(parts) > 1 else ""
+            parts = inp.split(maxsplit=1)
+            cmd, args = parts[0].lower(), parts[1] if len(parts) > 1 else ""
             
-            # Handle commands
-            if command in ("exit", "quit", "έξοδος"):
-                print("👋 Αντίο!")
+            if cmd in ("exit", "quit", "q"): 
                 break
-            
-            elif command in ("help", "βοήθεια"):
-                print_help()
-            
-            elif command == "register":
-                print("\n📝 Εγγραφή Νέου Λογαριασμού")
-                username = input("Username: ").strip()
-                email = input("Email: ").strip()
-                password = input("Password: ").strip()
-                client.register(username, email, password)
-            
-            elif command == "login":
-                print("\n🔐 Σύνδεση")
-                username = input("Username: ").strip()
-                password = input("Password: ").strip()
-                client.login(username, password)
-            
-            elif command == "logout":
-                client.logout()
-            
-            elif command == "whoami":
-                client.whoami()
-            
-            elif command == "new":
-                title = args or "Νέα Συνομιλία"
-                client.create_chat(title)
-            
-            elif command == "list":
-                client.list_chats()
-            
-            elif command == "select":
-                if args:
-                    client.select_chat(args)
-                else:
-                    print_colored("❌ Χρήση: select <αριθμός|id>", Colors.RED)
-            
-            elif command == "delete":
-                client.delete_chat(args if args else None)
-            
-            elif command == "history":
-                client.show_chat_history()
-            
-            elif command == "health":
-                client.check_health()
-            
-            elif command == "streaming":
-                client.toggle_streaming()
-            
-            elif command == "thinking":
-                client.toggle_thinking()
-            
+            elif cmd == "help":
+                print("""
+Commands:
+  register, login, logout     - Auth
+  new [title], list           - Chats  
+  select N, delete N          - Chat by number
+  
+  streaming                   - Toggle streaming
+  thinking                    - Toggle thinking display
+  tokens N                    - Set max tokens (50-2048)
+  status                      - Show settings
+  health, rag                 - Check API
+  
+  [message]                   - Send message
+""")
+            elif cmd == "register":
+                c.register(input("User: "), input("Email: "), input("Pass: "))
+            elif cmd == "login":
+                c.login(input("User: "), input("Pass: "))
+            elif cmd == "logout":
+                c.logout()
+            elif cmd == "new":
+                c.new_chat(args or "Νέα Συνομιλία")
+            elif cmd == "list":
+                c.list_chats()
+            elif cmd == "select":
+                c.select_chat(args) if args else print("select N")
+            elif cmd == "delete":
+                c.delete_chat(args if args else None)
+            elif cmd == "streaming":
+                c.toggle_streaming()
+            elif cmd == "thinking":
+                c.toggle_thinking()
+            elif cmd == "tokens":
+                c.set_max_tokens(int(args)) if args.isdigit() else print("tokens N")
+            elif cmd == "status":
+                c.show_status()
+            elif cmd == "health":
+                c.check_health()
+            elif cmd == "rag":
+                c.check_rag()
             else:
-                # Treat as message
-                client.send_message(user_input)
+                c.send(inp)
         
         except KeyboardInterrupt:
-            print("\n\n👋 Αντίο!")
+            print("\n👋 Bye!")
             break
-        except Exception as e:
-            print_colored(f"❌ Σφάλμα: {e}", Colors.RED)
+        except Exception as ex:
+            cprint(f"❌ {ex}", Colors.RED)
 
 
 if __name__ == "__main__":

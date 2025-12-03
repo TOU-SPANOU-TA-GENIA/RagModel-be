@@ -54,7 +54,10 @@ async def lifespan(app: FastAPI):
         init_database()
         
         # ========== NETWORK FILESYSTEM + RAG INITIALIZATION ==========
-        logger.info("Initializing network filesystem...")
+        logger.info("=" * 60)
+        logger.info("🔌 NETWORK FILESYSTEM INITIALIZATION")
+        logger.info("=" * 60)
+
         try:
             from app.core.network_filesystem import initialize_network_monitor, NetworkShare
             from app.core.network_rag_integration import initialize_network_rag
@@ -62,65 +65,96 @@ async def lifespan(app: FastAPI):
             
             network_config = config.get_section('network_filesystem')
             
+            if network_config:
+                logger.info(f"Network config found: enabled={network_config.get('enabled')}")
+            else:
+                logger.warning("No 'network_filesystem' section in config.json")
+            
             if network_config and network_config.get('enabled'):
                 shares = []
-                for share_data in network_config.get('shares', []):
+                shares_config = network_config.get('shares', [])
+                logger.info(f"Configured shares: {len(shares_config)}")
+                
+                for i, share_data in enumerate(shares_config):
+                    logger.info(f"  Share {i+1}: {share_data.get('name', 'unnamed')}")
+                    logger.info(f"    enabled: {share_data.get('enabled')}")
+                    logger.info(f"    path: {share_data.get('mount_path')}")
+                    
                     if share_data.get('enabled'):
-                        share = NetworkShare(
-                            name=share_data['name'],
-                            mount_path=Path(share_data['mount_path']),
-                            share_type=share_data.get('share_type', 'smb'),
-                            enabled=True,
-                            auto_index=share_data.get('auto_index', True),
-                            watch_for_changes=share_data.get('watch_for_changes', True),
-                            scan_interval=share_data.get('scan_interval', 300),
-                            include_extensions=share_data.get('include_extensions', []),
-                            exclude_patterns=share_data.get('exclude_patterns', []),
-                            max_file_size_mb=share_data.get('max_file_size_mb', 100)
-                        )
-                        shares.append(share)
-                        logger.info(f"  📁 Configured share: {share.name} at {share.mount_path}")
+                        mount_path = Path(share_data['mount_path'])
+                        
+                        # Check if path exists
+                        if mount_path.exists():
+                            logger.info(f"    ✅ Path accessible")
+                            
+                            share = NetworkShare(
+                                name=share_data['name'],
+                                mount_path=mount_path,
+                                share_type=share_data.get('share_type', 'smb'),
+                                enabled=True,
+                                auto_index=share_data.get('auto_index', True),
+                                watch_for_changes=share_data.get('watch_for_changes', True),
+                                scan_interval=share_data.get('scan_interval', 300),
+                                include_extensions=share_data.get('include_extensions', []),
+                                exclude_patterns=share_data.get('exclude_patterns', []),
+                                max_file_size_mb=share_data.get('max_file_size_mb', 100)
+                            )
+                            shares.append(share)
+                        else:
+                            logger.warning(f"    ❌ Path NOT accessible: {mount_path}")
                 
                 if shares:
-                    # Initialize monitoring
+                    logger.info(f"\n📁 Initializing monitor for {len(shares)} shares...")
                     monitor = initialize_network_monitor(shares)
-                    logger.info(f"✅ Network monitoring initialized for {len(shares)} shares")
                     
-                    # Initialize RAG integration with ingestion function
+                    logger.info("🔍 Scanning all shares for files...")
+                    monitor.scan_all_shares()
+                    
+                    stats = monitor.get_stats()
+                    logger.info(f"\n📊 DISCOVERY RESULTS:")
+                    logger.info(f"   Total files found: {stats['total_files']}")
+                    for share_name, count in stats['by_share'].items():
+                        logger.info(f"   - {share_name}: {count} files")
+                    
                     if network_config.get('auto_start_monitoring', True):
+                        logger.info("\n📥 Initializing RAG integration...")
                         integrator = initialize_network_rag(monitor, ingest_file)
                         
-                        # Trigger initial scan
-                        logger.info("🔍 Starting initial file discovery...")
-                        monitor.scan_all_shares()
-                        stats = monitor.get_stats()
-                        logger.info(f"📊 Discovery complete: {stats['total_files']} files found")
+                        # Index files NOW
+                        logger.info("\n🚀 STARTING INITIAL RAG INDEXING...")
+                        logger.info("-" * 40)
                         
-                        for share_name, count in stats['by_share'].items():
-                            logger.info(f"   - {share_name}: {count} files")
-                        
-                        # CRITICAL: Index files NOW before starting background thread
-                        logger.info("📥 Starting initial RAG indexing...")
                         index_result = integrator.index_all_now()
+                        
+                        logger.info("-" * 40)
                         if index_result.get("success"):
-                            logger.info(f"✅ Indexed {index_result['files_indexed']} files into RAG")
+                            logger.info(f"✅ INDEXING COMPLETE:")
+                            logger.info(f"   Files indexed: {index_result['files_indexed']}")
+                            logger.info(f"   Total files: {index_result['total_files']}")
+                            logger.info(f"   Message: {index_result.get('message', '')}")
                         else:
-                            logger.warning(f"⚠️ Indexing issue: {index_result.get('message')}")
+                            logger.error(f"❌ INDEXING FAILED:")
+                            logger.error(f"   {index_result.get('message', 'Unknown error')}")
                         
                         # Start background monitoring
+                        logger.info("\n🔄 Starting background monitoring thread...")
                         integrator.start()
-                        logger.info("✅ Network-RAG integration started")
+                        logger.info("✅ Background indexing active (checks every 60s)")
                     else:
-                        logger.info("Auto-start monitoring disabled")
+                        logger.info("Auto-start monitoring disabled in config")
                 else:
-                    logger.warning("No enabled network shares configured")
+                    logger.warning("No enabled/accessible network shares found")
             else:
-                logger.info("Network filesystem disabled in configuration")
-        
+                logger.info("Network filesystem disabled or not configured")
+
         except Exception as e:
-            logger.error(f"Network filesystem initialization failed: {e}")
+            logger.error(f"❌ Network filesystem initialization FAILED: {e}")
             import traceback
             traceback.print_exc()
+
+        logger.info("=" * 60)
+        logger.info("🔌 NETWORK FILESYSTEM INITIALIZATION COMPLETE")
+        logger.info("=" * 60)
         # ========== END NETWORK FILESYSTEM ==========
         
         # Initialize system (Agent, Models, etc.)
@@ -200,26 +234,45 @@ app.include_router(config_router)
 # Streaming Endpoints
 # =============================================================================
 
+from pydantic import BaseModel
+from typing import Optional
+import json
+import asyncio
+from typing import Optional
+from queue import Queue, Empty
+from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
+
+
 class StreamingChatRequest(BaseModel):
     """Request for streaming chat."""
     content: str
     chat_id: Optional[str] = None
     include_thinking: bool = False
+    max_tokens: Optional[int] = 256 
 
 
 async def generate_streaming_response(
     content: str,
     chat_id: Optional[str] = None,
-    include_thinking: bool = False
+    include_thinking: bool = False,
+    max_tokens: int = 256
 ):
-    """Async generator for streaming SSE responses."""
+    """
+    TRUE streaming using the EXISTING agent's model.
+    
+    Key fix: Uses agent.llm_provider.model/tokenizer instead of loading new model.
+    """
     from app.agent.integration import get_agent
     from app.core.interfaces import Context
     
     try:
+        # Phase 1: Acknowledge
+        yield f"data: {json.dumps({'type': 'status', 'data': '🔍 Αναζήτηση...'}, ensure_ascii=False)}\n\n"
+        
         agent = get_agent()
         
-        # Build context with all required arguments
+        # Build context
         context = Context(
             query=content,
             chat_history=[],
@@ -227,79 +280,270 @@ async def generate_streaming_response(
             debug_info=[]
         )
         
-        # Run preprocessing (intent, RAG, tools)
-        context = agent.run_preprocessing(context)
+        # Phase 2: Preprocessing (RAG, intent)
+        logger.info(f"📥 Query: {content[:100]}...")
+        
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            preprocessing_future = loop.run_in_executor(
+                executor,
+                agent.run_preprocessing,
+                context
+            )
+            
+            while not preprocessing_future.done():
+                yield f"data: {json.dumps({'type': 'heartbeat', 'data': ''}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.5)
+            
+            context = preprocessing_future.result()
+        
         prompt = context.metadata.get("prompt", content)
         
-        # Get LLM provider
+        # Add instruction for thinking language and response language
+        # Qwen3 /think mode will be enabled, but we instruct it on language
+        thinking_instruction = """
+
+<instructions>
+THINKING LANGUAGE: When using <think> tags, think in English or Greek - NOT Chinese.
+RESPONSE LANGUAGE: Your final response MUST be in Greek (Ελληνικά).
+
+Process:
+1. Think through the problem (in English or Greek)
+2. Respond to the user in Greek
+</instructions>
+
+"""
+        
+        # Add /think at the end to enable thinking mode
+        prompt = prompt + thinking_instruction + "/think"
+        
+        logger.info(f"📝 Prompt ready: {len(prompt)} chars (thinking enabled)")
+        
+        # Check for RAG context
+        rag_context = context.metadata.get("rag_context", "")
+        if rag_context:
+            yield f"data: {json.dumps({'type': 'status', 'data': '📚 Βρέθηκαν σχετικά έγγραφα'}, ensure_ascii=False)}\n\n"
+        
+        # Phase 3: STREAMING GENERATION using existing model
+        yield f"data: {json.dumps({'type': 'status', 'data': '💭 Δημιουργία απάντησης...'}, ensure_ascii=False)}\n\n"
+        logger.info("📤 Sent 'generating' status")
+        
+        # Force flush by yielding a small delay
+        await asyncio.sleep(0.1)
+        
+        yield f"data: {json.dumps({'type': 'response_start', 'data': ''}, ensure_ascii=False)}\n\n"
+        logger.info("📤 Sent 'response_start'")
+        
+        await asyncio.sleep(0.1)
+        
+        # Get the EXISTING model from agent
         llm = agent.llm_provider
         
-        # Check if provider supports streaming
-        if hasattr(llm, 'generate_stream'):
-            async for event in llm.generate_stream(prompt, include_thinking=include_thinking):
-                yield f"data: {json.dumps({'type': event.event_type.value, 'data': event.data}, ensure_ascii=False)}\n\n"
+        # Handle different provider types
+        if hasattr(llm, 'provider') and llm.provider is not None:
+            # PreWarmedLLMProvider wraps FastLocalModelProvider
+            inner_provider = llm.provider
+            inner_provider._ensure_initialized()
+            model = inner_provider.model
+            tokenizer = inner_provider.tokenizer
+            logger.info("Using model from PreWarmedLLMProvider")
+        elif hasattr(llm, '_ensure_initialized'):
+            # Direct provider with _ensure_initialized
+            llm._ensure_initialized()
+            model = llm.model
+            tokenizer = llm.tokenizer
+            logger.info("Using model from direct provider")
+        elif hasattr(llm, 'model') and llm.model is not None:
+            # Already initialized provider
+            model = llm.model
+            tokenizer = llm.tokenizer
+            logger.info("Using already-initialized model")
         else:
-            # Fallback: generate full response and yield in chunks
-            from app.config import LLM
-            response = llm.generate(prompt, max_new_tokens=LLM.max_new_tokens)
-            
-            # Clean response
-            from app.agent.orchestrator import ResponseCleaner
-            thinking, clean_response = ResponseCleaner.extract_thinking(response)
-            
-            if include_thinking and thinking:
-                yield f"data: {json.dumps({'type': 'thinking_start', 'data': ''}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'type': 'token', 'data': thinking}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'type': 'thinking_end', 'data': ''}, ensure_ascii=False)}\n\n"
-            
-            yield f"data: {json.dumps({'type': 'response_start', 'data': ''}, ensure_ascii=False)}\n\n"
-            
-            # Yield response in chunks
-            chunk_size = 20
-            for i in range(0, len(clean_response), chunk_size):
-                chunk = clean_response[i:i+chunk_size]
-                yield f"data: {json.dumps({'type': 'token', 'data': chunk}, ensure_ascii=False)}\n\n"
-                await asyncio.sleep(0.01)
-            
-            yield f"data: {json.dumps({'type': 'response_end', 'data': ''}, ensure_ascii=False)}\n\n"
+            raise RuntimeError(f"Cannot get model from provider type: {type(llm).__name__}")
         
+        # Queue for streaming
+        token_queue = Queue()
+        generation_done = {"done": False}
+        
+        def generate_with_streamer():
+            """Generate tokens using the existing model with TextIteratorStreamer."""
+            try:
+                import torch
+                from transformers import TextIteratorStreamer
+                
+                logger.info(f"🔧 Starting generation thread...")
+                logger.info(f"   Model type: {type(model).__name__}")
+                logger.info(f"   Max tokens: {max_tokens}")
+                
+                # Tokenize
+                inputs = tokenizer(prompt, return_tensors="pt")
+                input_len = inputs["input_ids"].shape[1]
+                logger.info(f"   Input tokens: {input_len}")
+                
+                if torch.cuda.is_available():
+                    inputs = {k: v.cuda() for k, v in inputs.items()}
+                    logger.info(f"   Moved to CUDA")
+                
+                # Create streamer
+                streamer = TextIteratorStreamer(
+                    tokenizer,
+                    skip_prompt=True,
+                    skip_special_tokens=True,
+                    timeout=300  # 5 min timeout per token
+                )
+                logger.info(f"   Streamer created")
+                
+                # Generation config
+                gen_kwargs = {
+                    **inputs,
+                    "streamer": streamer,
+                    "max_new_tokens": max_tokens,
+                    "temperature": 0.7,
+                    "do_sample": True,
+                    "top_p": 0.9,
+                    "repetition_penalty": 1.1,
+                    "pad_token_id": tokenizer.eos_token_id,
+                }
+                
+                # Start generation in background
+                logger.info(f"   Starting model.generate()...")
+                
+                def run_generate():
+                    try:
+                        model.generate(**gen_kwargs)
+                        logger.info(f"   model.generate() completed")
+                    except Exception as e:
+                        logger.error(f"   model.generate() failed: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                gen_thread = Thread(target=run_generate)
+                gen_thread.start()
+                
+                # Stream tokens from streamer
+                token_count = 0
+                logger.info(f"   Waiting for tokens from streamer...")
+                
+                for token in streamer:
+                    token_count += 1
+                    token_queue.put(("token", token))
+                    if token_count <= 5:
+                        logger.info(f"   Token {token_count}: '{token[:20]}...'")
+                
+                logger.info(f"   Streamer finished. Total tokens: {token_count}")
+                gen_thread.join(timeout=10)
+                token_queue.put(("done", None))
+                
+            except Exception as e:
+                logger.error(f"Generation error: {e}")
+                import traceback
+                traceback.print_exc()
+                token_queue.put(("error", str(e)))
+            finally:
+                generation_done["done"] = True
+                logger.info(f"   Generation thread finished")
+        
+        # Start generation thread
+        gen_thread = Thread(target=generate_with_streamer, daemon=True)
+        gen_thread.start()
+        
+        # Stream tokens as they arrive
+        in_thinking = False
+        token_count = 0
+        
+        while True:
+            try:
+                event_type, data = token_queue.get(timeout=0.5)
+                
+                if event_type == "token":
+                    token_count += 1
+                    
+                    # Skip empty tokens
+                    if not data or not data.strip():
+                        continue
+                    
+                    # Detect thinking tags (handle partial matches too)
+                    if "<think>" in data or data.strip().startswith("<think"):
+                        in_thinking = True
+                        if include_thinking:
+                            yield f"data: {json.dumps({'type': 'thinking_start', 'data': ''}, ensure_ascii=False)}\n\n"
+                        # Don't output the tag itself
+                        data = data.replace("<think>", "").replace("<think", "")
+                        if not data.strip():
+                            continue
+                    
+                    if "</think>" in data or data.strip().endswith("</think"):
+                        in_thinking = False
+                        if include_thinking:
+                            yield f"data: {json.dumps({'type': 'thinking_end', 'data': ''}, ensure_ascii=False)}\n\n"
+                        # Don't output the tag itself
+                        data = data.replace("</think>", "").replace("</think", "")
+                        if not data.strip():
+                            continue
+                    
+                    # Skip language markers and garbage
+                    if data.strip() in ['/zh', '/en', '/el', '/', '//', '/no_think', '/think']:
+                        continue
+                    
+                    # Filter Chinese characters - skip tokens that are mostly Chinese
+                    # This applies to both thinking and response (we want English/Greek thinking)
+                    chinese_chars = sum(1 for c in data if '\u4e00' <= c <= '\u9fff')
+                    if chinese_chars > 0 and chinese_chars > len(data.strip()) * 0.3:
+                        logger.debug(f"   Filtering Chinese: {data[:30]}")
+                        continue
+                    
+                    # Stream token
+                    if in_thinking:
+                        if include_thinking:
+                            yield f"data: {json.dumps({'type': 'token', 'data': data}, ensure_ascii=False)}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'token', 'data': data}, ensure_ascii=False)}\n\n"
+                    
+                    # Give event loop a chance
+                    await asyncio.sleep(0.01)
+                
+                elif event_type == "done":
+                    break
+                
+                elif event_type == "error":
+                    yield f"data: {json.dumps({'type': 'error', 'data': data}, ensure_ascii=False)}\n\n"
+                    break
+                    
+            except Empty:
+                if generation_done["done"]:
+                    break
+                # Send heartbeat to keep connection alive
+                yield f"data: {json.dumps({'type': 'heartbeat', 'data': ''}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.1)
+        
+        gen_thread.join(timeout=5)
+        
+        logger.info(f"✅ Streamed {token_count} tokens")
+        
+        yield f"data: {json.dumps({'type': 'response_end', 'data': ''}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'done', 'data': ''}, ensure_ascii=False)}\n\n"
         
     except Exception as e:
-        logger.error(f"Streaming error: {e}")
+        logger.error(f"Stream error: {e}")
+        import traceback
+        traceback.print_exc()
         yield f"data: {json.dumps({'type': 'error', 'data': str(e)}, ensure_ascii=False)}\n\n"
 
 
+
+
+
+
+# Updated endpoint
 @app.post("/stream/chat")
 async def stream_chat_post(request: StreamingChatRequest):
-    """Stream chat response using Server-Sent Events (SSE)."""
+    """Stream chat with true real-time token output."""
     return StreamingResponse(
         generate_streaming_response(
             content=request.content,
             chat_id=request.chat_id,
-            include_thinking=request.include_thinking
-        ),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        }
-    )
-
-
-@app.get("/stream/chat")
-async def stream_chat_get(
-    content: str = Query(..., description="Message content"),
-    chat_id: Optional[str] = Query(None, description="Chat ID"),
-    include_thinking: bool = Query(False, description="Include thinking in stream")
-):
-    """Stream chat using GET (for EventSource API)."""
-    return StreamingResponse(
-        generate_streaming_response(
-            content=content,
-            chat_id=chat_id,
-            include_thinking=include_thinking
+            include_thinking=request.include_thinking,
+            max_tokens=request.max_tokens or 256
         ),
         media_type="text/event-stream",
         headers={

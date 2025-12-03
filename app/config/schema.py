@@ -67,7 +67,7 @@ class LLMSettings:
                        "HuggingFace model path", "str", "./offline_models/qwen3-4b",
                        requires_restart=True),
             ConfigField("max_new_tokens", ConfigCategory.LLM,
-                       "Maximum tokens to generate", "int", 2048, 1, 4096),
+                       "Maximum tokens to generate", "int", 256, 1, 512),
             ConfigField("temperature", ConfigCategory.LLM,
                        "Sampling temperature (higher = more random)", "float", 0.7, 0.0, 2.0),
             ConfigField("top_p", ConfigCategory.LLM,

@@ -217,11 +217,20 @@ async def ingest_single_file(filepath: str) -> dict:
 
 def ingest_file(filepath: Path) -> bool:
     """
-    Simple synchronous wrapper for ingesting a single file.
-    Uses the CONFIGURED embedding model for consistency.
+    Ingest a single file into the RAG vector store.
+    
+    Uses the global memory_db singleton via FastInMemoryVectorStore.
+    All ingested files share the same in-memory index.
+    
+    Args:
+        filepath: Path to the file to ingest
+        
+    Returns:
+        True if successful, False otherwise
     """
     try:
-        from app.config import EMBEDDING_MODEL_NAME  # Use config!
+        from app.config import EMBEDDING_MODEL_NAME
+        from app.core.memory_store import FastInMemoryVectorStore, CachedEmbeddingProvider
         
         filepath_str = str(filepath) if isinstance(filepath, Path) else filepath
         path = Path(filepath_str)
@@ -230,7 +239,13 @@ def ingest_file(filepath: Path) -> bool:
             logger.warning(f"File not found: {filepath_str}")
             return False
         
+        logger.info(f"📄 Ingesting: {path.name}")
+        
+        # Load content
         content = load_text_file(path)
+        logger.debug(f"   Loaded {len(content)} chars")
+        
+        # Create document
         doc = Document(
             content=content,
             metadata={
@@ -240,12 +255,11 @@ def ingest_file(filepath: Path) -> bool:
             }
         )
         
-        from app.core.memory_store import CachedEmbeddingProvider
-        
-        # FIX: Use configured model name, not default
+        # Use cached embedding provider with configured model
         base_embedding_provider = LocalEmbeddingProvider(EMBEDDING_MODEL_NAME)
         embedding_provider = CachedEmbeddingProvider(base_embedding_provider)
         
+        # Process into chunks
         processor = DocumentProcessor(
             embedding_provider=embedding_provider,
             chunk_size=RAG_CONFIG["chunk_size"],
@@ -253,8 +267,11 @@ def ingest_file(filepath: Path) -> bool:
         )
         
         chunks = processor.process_text(doc.content, doc.metadata)
+        logger.debug(f"   Created {len(chunks)} chunks")
         
-        from app.core.memory_store import FastInMemoryVectorStore
+        # Add to vector store
+        # FastInMemoryVectorStore uses the global memory_db singleton internally
+        # so all instances share the same storage
         vector_store = FastInMemoryVectorStore(dimension=384)
         
         chunk_dicts = [
@@ -268,16 +285,14 @@ def ingest_file(filepath: Path) -> bool:
         
         vector_store.add_documents(chunk_dicts)
         
-        logger.info(f"✅ Ingested file: {path.name} ({len(chunks)} chunks)")
+        logger.info(f"✅ Indexed: {path.name} ({len(chunks)} chunks)")
         return True
     
     except Exception as e:
-        logger.error(f"Failed to ingest {filepath}: {e}")
+        logger.error(f"❌ Failed to ingest {filepath}: {e}")
         import traceback
         traceback.print_exc()
-        return False
-    
-    
+        return False  
     
     
     
