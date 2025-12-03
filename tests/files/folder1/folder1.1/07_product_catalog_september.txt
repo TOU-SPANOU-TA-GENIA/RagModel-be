@@ -1,0 +1,28 @@
+ΚΑΤΑΛΟΓΟΣ ΠΡΟΪΟΝΤΩΝ - ΕΚΔΟΣΗ ΣΕΠΤΕΜΒΡΙΟΣ 2024
+===============================================
+
+Προϊόν X - Enterprise AI Platform (UPDATED)
+Τιμή: €32,500.00
+Χαρακτηριστικά:
+- Machine learning pipelines
+- Real-time analytics  
+- Custom model training
+- NEW: Cloud integration
+
+Προϊόν Α-1234/Β - NLP Suite Professional
+Τιμή: €45,750.00 (καμία αλλαγή)
+Χαρακτηριστικά:
+- Ελληνική γλώσσα optimization
+- Sentiment analysis
+- Entity recognition
+
+Προϊόν Υ - Data Analytics Basic
+Τιμή: €10,900.00 (ΜΕΙΩΣΗ ΤΙΜΗΣ)
+Χαρακτηριστικά:
+- Dashboards
+- Basic reporting
+- 10 user licenses (upgraded από 5)
+
+Ημερομηνία έκδοσης: 1 Σεπτεμβρίου 2024
+Υπεύθυνος: Τμήμα Προϊόντων
+ΣΗΜΕΙΩΣΗ: Αντικαθιστά τον κατάλογο Μαρτίου 2024

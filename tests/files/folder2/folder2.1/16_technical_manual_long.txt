@@ -1,0 +1,95 @@
+ΤΕΧΝΙΚΟ MANUAL - AI PLATFORM v2.0 (ΠΛΗΡΗΣ ΕΚΔΟΣΗ)
+==================================================
+Σελίδες: 1-200 (περίληψη)
+
+ΚΕΦΑΛΑΙΟ 1: ΕΙΣΑΓΩΓΗ (σελ. 1-20)
+Το AI Platform v2.0 είναι ολοκληρωμένη λύση για ανάπτυξη και deployment εφαρμογών τεχνητής νοημοσύνης. Περιλαμβάνει εργαλεία για data preprocessing, model training, evaluation, και production deployment.
+
+ΚΕΦΑΛΑΙΟ 2: ΕΓΚΑΤΑΣΤΑΣΗ (σελ. 21-45)
+Απαιτήσεις συστήματος:
+- OS: Linux (Ubuntu 22.04+), Windows 10+, macOS 12+
+- RAM: Minimum 16GB, Recommended 32GB
+- GPU: NVIDIA με CUDA support (optional αλλά recommended)
+- Storage: 50GB ελεύθερος χώρος
+- Python: 3.9 ή νεότερο
+
+Εγκατάσταση:
+1. Download το installer από το portal
+2. Run: python install.py --mode=production
+3. Configure database connection
+4. Initialize vector stores
+5. Test installation με: python test_installation.py
+
+ΚΕΦΑΛΑΙΟ 3: ΑΡΧΙΤΕΚΤΟΝΙΚΗ (σελ. 46-80)
+Η αρχιτεκτονική αποτελείται από:
+- API Gateway Layer για request handling
+- Authentication & Authorization με JWT
+- Business Logic Layer για core operations
+- Data Access Layer για database operations
+- ML Pipeline Layer για training και inference
+- Caching Layer με Redis για performance
+- Message Queue για async operations
+- Monitoring & Logging infrastructure
+
+ΚΕΦΑΛΑΙΟ 4: DATA MANAGEMENT (σελ. 81-110)
+Διαχείριση δεδομένων:
+- Structured data σε PostgreSQL
+- Unstructured data σε object storage
+- Vector embeddings σε ChromaDB
+- Time-series data σε InfluxDB
+- Caching σε Redis
+
+Data preprocessing pipelines:
+- Text cleaning και normalization
+- Feature extraction
+- Data augmentation techniques
+- Train/validation/test splitting
+
+ΚΕΦΑΛΑΙΟ 5: MODEL TRAINING (σελ. 111-145)
+Training procedures:
+- Data loading και batching
+- Hyperparameter tuning
+- Cross-validation strategies
+- Model checkpointing
+- Early stopping criteria
+- Distributed training configuration
+
+Supported model types:
+- Transformer-based models
+- Convolutional networks
+- Recurrent networks
+- Ensemble methods
+
+ΚΕΦΑΛΑΙΟ 6: DEPLOYMENT (σελ. 146-170)
+Production deployment:
+- Docker containerization
+- Kubernetes orchestration
+- Load balancing configuration
+- Auto-scaling policies
+- Blue-green deployments
+- Canary releases
+- Rollback procedures
+
+ΚΕΦΑΛΑΙΟ 7: MONITORING (σελ. 171-190)
+Performance monitoring:
+- Request latency metrics
+- Throughput measurements
+- Error rate tracking
+- Resource utilization
+- Model accuracy monitoring
+- Data drift detection
+
+ΚΕΦΑΛΑΙΟ 8: TROUBLESHOOTING (σελ. 191-200)
+Common issues:
+- Out of memory errors
+- GPU allocation failures
+- Slow inference times
+- Connection timeouts
+- Data consistency problems
+
+ΣΥΜΠΕΡΑΣΜΑ:
+Το manual αυτό καλύπτει όλες τις πτυχές του AI Platform v2.0 από basic setup έως advanced production scenarios.
+
+Συγγραφέας: Technical Documentation Team
+Έκδοση: 2.0.1
+Ημερομηνία: Οκτώβριος 2024

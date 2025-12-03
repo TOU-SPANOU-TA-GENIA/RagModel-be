@@ -1,0 +1,39 @@
+ΠΑΚΕΤΑ ΥΠΗΡΕΣΙΩΝ
+=================
+
+ΒΑΣΙΚΟ ΠΑΚΕΤΟ (€5,000/μήνα)
+Περιλαμβάνει:
+- Email support (24h response)
+- Μηνιαίες ενημερώσεις λογισμικού
+- Βασική τεχνική υποστήριξη
+- Access σε documentation
+- 10 support tickets/μήνα
+
+ΔΕΝ περιλαμβάνει:
+- Τηλεφωνική υποστήριξη
+- Custom development
+- On-site training
+- Dedicated account manager
+- Weekend support
+- Data migration services
+
+---
+
+PREMIUM ΠΑΚΕΤΟ (€15,000/μήνα)
+Περιλαμβάνει όλα όσα το βασικό PLUS:
+- Τηλεφωνική υποστήριξη 24/7
+- Custom development (20h/μήνα)
+- Quarterly on-site training
+- Dedicated account manager
+- Weekend support
+- Priority ticket handling
+
+ΔΕΝ περιλαμβάνει:
+- Data migration services (χρεώνεται ξεχωριστά)
+- Hardware procurement
+- Third-party integrations
+
+---
+
+ENTERPRISE ΠΑΚΕΤΟ (Custom pricing)
+Περιλαμβάνει ΟΛΑ
