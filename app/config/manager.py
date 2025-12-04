@@ -23,7 +23,12 @@ from app.config.schema import (
     PathSettings,
     DocumentSettings,
     ResponseSettings,
-    NetworkFilesystemSettings,  # ← ADD THIS
+    NetworkFilesystemSettings,
+    StreamingSettings,
+    ModelsSettings,
+    PromptTemplatesSettings,
+    ResponseCleaningSettings,
+    LocalizationSettings,
     ConfigCategory,
     ConfigField
 )
@@ -77,7 +82,12 @@ class ConfigurationManager:
             'paths': PathSettings(),
             'documents': DocumentSettings(),
             'response': ResponseSettings(),
-            'network_filesystem': NetworkFilesystemSettings(),  # ← ADD THIS
+            'network_filesystem': NetworkFilesystemSettings(),
+            'streaming': StreamingSettings(),
+            'models': ModelsSettings(),
+            'prompt_templates': PromptTemplatesSettings(),
+            'response_cleaning': ResponseCleaningSettings(),
+            'localization': LocalizationSettings(),
         }
     
     def initialize(self, config_file: Optional[str] = None, base_dir: Optional[str] = None):
@@ -105,7 +115,7 @@ class ConfigurationManager:
                     self._load_from_file()
     
     def _resolve_paths(self):
-        """Resolve relative paths to absolute paths - UPDATED: no knowledge_dir/instructions_dir."""
+        """Resolve relative paths to absolute paths."""
         base = Path(self._settings['paths'].base_dir)
         paths = self._settings['paths']
         
@@ -204,6 +214,26 @@ class ConfigurationManager:
     def network_filesystem(self) -> NetworkFilesystemSettings:
         return self._settings['network_filesystem']
     
+    @property
+    def streaming(self) -> StreamingSettings:
+        return self._settings['streaming']
+    
+    @property
+    def models(self) -> ModelsSettings:
+        return self._settings['models']
+    
+    @property
+    def prompt_templates(self) -> PromptTemplatesSettings:
+        return self._settings['prompt_templates']
+    
+    @property
+    def response_cleaning(self) -> ResponseCleaningSettings:
+        return self._settings['response_cleaning']
+    
+    @property
+    def localization(self) -> LocalizationSettings:
+        return self._settings['localization']
+    
     # =========================================================================
     # Dynamic access and updates
     # =========================================================================
@@ -217,50 +247,41 @@ class ConfigurationManager:
             return None
     
     def get_section(self, category: str) -> Optional[Dict[str, Any]]:
-        """
-        Get an entire configuration section as dictionary.
-        
-        Args:
-            category: Section name (e.g., 'llm', 'rag', 'network_filesystem')
-        
-        Returns:
-            Dictionary of all settings in that section, or None if not found
-        """
+        """Get an entire configuration section as dictionary."""
         with self._lock:
             settings = self._settings.get(category)
             if settings:
-                # If it's a dataclass, convert to dict
-                if hasattr(settings, 'to_dict'):
-                    return settings.to_dict()
-                # Otherwise try asdict
-                try:
-                    return asdict(settings)
-                except:
-                    # If all else fails, return as-is (for dict-like objects)
-                    if isinstance(settings, dict):
-                        return settings
+                return settings.to_dict()
             return None
     
     def set(self, category: str, field: str, value: Any) -> bool:
         """
-        Set a configuration value with validation.
+        Set a configuration value.
         
+        Args:
+            category: Settings category (llm, rag, etc.)
+            field: Field name within category
+            value: New value
+            
         Returns:
-            True if successful, False if validation failed
+            True if successful, False otherwise
         """
         with self._lock:
             settings = self._settings.get(category)
-            if not settings or not hasattr(settings, field):
+            if not settings:
                 return False
             
-            # Validate the value
+            if not hasattr(settings, field):
+                return False
+            
+            # Validate
             if not self._validate_field(category, field, value):
                 return False
             
             # Store old value for callbacks
             old_value = getattr(settings, field)
             
-            # Set new value
+            # Update
             setattr(settings, field, value)
             
             # Trigger callbacks
@@ -268,15 +289,50 @@ class ConfigurationManager:
             
             return True
     
+    def _validate_field(self, category: str, field: str, value: Any) -> bool:
+        """Validate a field value."""
+        settings = self._settings.get(category)
+        if not settings:
+            return False
+        
+        # Get metadata for validation
+        metadata_method = getattr(settings.__class__, 'get_field_metadata', None)
+        if not metadata_method:
+            return True
+        
+        for field_meta in metadata_method():
+            if field_meta.name == field:
+                # Check type
+                if field_meta.field_type == "int" and not isinstance(value, int):
+                    return False
+                if field_meta.field_type == "float" and not isinstance(value, (int, float)):
+                    return False
+                if field_meta.field_type == "bool" and not isinstance(value, bool):
+                    return False
+                
+                # Check range
+                if field_meta.min_value is not None and value < field_meta.min_value:
+                    return False
+                if field_meta.max_value is not None and value > field_meta.max_value:
+                    return False
+                
+                # Check options
+                if field_meta.options and value not in field_meta.options:
+                    return False
+                
+                return True
+        
+        return True
+    
     def update_batch(self, updates: Dict[str, Dict[str, Any]]) -> Dict[str, bool]:
         """
-        Update multiple configuration values at once.
+        Update multiple settings at once.
         
         Args:
-            updates: {category: {field: value, ...}, ...}
-        
+            updates: Dict of {category: {field: value, ...}, ...}
+            
         Returns:
-            {category.field: success, ...}
+            Dict of {category.field: success_bool}
         """
         results = {}
         
@@ -287,58 +343,11 @@ class ConfigurationManager:
         
         return results
     
-    def _validate_field(self, category: str, field: str, value: Any) -> bool:
-        """Validate a field value against its metadata."""
-        settings = self._settings.get(category)
-        if not settings:
-            return False
-        
-        # Get metadata for this field
-        metadata_method = getattr(settings.__class__, 'get_field_metadata', None)
-        if not metadata_method:
-            return True  # No metadata, assume valid
-        
-        fields_metadata = metadata_method()
-        field_meta = next((f for f in fields_metadata if f.name == field), None)
-        
-        if not field_meta:
-            return True  # No metadata for field, assume valid
-        
-        # Type check
-        if field_meta.field_type == "int":
-            if not isinstance(value, int):
-                try:
-                    value = int(value)
-                except:
-                    return False
-            
-            # Range check
-            if field_meta.min_value is not None and value < field_meta.min_value:
-                return False
-            if field_meta.max_value is not None and value > field_meta.max_value:
-                return False
-        
-        elif field_meta.field_type == "float":
-            if not isinstance(value, (int, float)):
-                try:
-                    value = float(value)
-                except:
-                    return False
-            
-            # Range check
-            if field_meta.min_value is not None and value < field_meta.min_value:
-                return False
-            if field_meta.max_value is not None and value > field_meta.max_value:
-                return False
-        
-        elif field_meta.field_type == "str":
-            # Options check
-            if field_meta.options and value not in field_meta.options:
-                return False
-        
-        return True
+    # =========================================================================
+    # Change callbacks
+    # =========================================================================
     
-    def register_callback(self, category: str, field: str, callback):
+    def on_change(self, category: str, field: str, callback):
         """Register a callback for when a field changes."""
         key = f"{category}.{field}"
         if key not in self._change_callbacks:

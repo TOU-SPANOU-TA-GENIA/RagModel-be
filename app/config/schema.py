@@ -44,8 +44,8 @@ class ConfigField:
 @dataclass
 class LLMSettings:
     """Language model settings."""
-    model_name: str = "./offline_models/qwen3-4b"  # ← New default
-    max_new_tokens: int = 512  # ← New default
+    model_name: str = "./offline_models/qwen3-4b"
+    max_new_tokens: int = 512
     trust_remote_code: bool = True
     temperature: float = 0.7
     top_p: float = 0.9
@@ -67,7 +67,7 @@ class LLMSettings:
                        "HuggingFace model path", "str", "./offline_models/qwen3-4b",
                        requires_restart=True),
             ConfigField("max_new_tokens", ConfigCategory.LLM,
-                       "Maximum tokens to generate", "int", 256, 1, 512),
+                       "Maximum tokens to generate", "int", 512, 1, 2048),
             ConfigField("temperature", ConfigCategory.LLM,
                        "Sampling temperature (higher = more random)", "float", 0.7, 0.0, 2.0),
             ConfigField("top_p", ConfigCategory.LLM,
@@ -297,11 +297,12 @@ class DocumentSettings:
 @dataclass
 class ResponseSettings:
     """Response processing settings."""
+    clean_thinking_tags: bool = True
     clean_xml_tags: bool = True
     clean_meta_commentary: bool = True
-    clean_reasoning_markers: bool = True
     normalize_whitespace: bool = True
     max_response_length: Optional[int] = None
+    language: str = "greek"
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -365,3 +366,168 @@ class NetworkFilesystemSettings:
                        "Auto-start monitoring on startup", "bool", True,
                        requires_restart=True),
         ]
+
+
+# =============================================================================
+# Streaming Configuration
+# =============================================================================
+
+@dataclass
+class StreamingSettings:
+    """Streaming generation settings."""
+    enabled: bool = True
+    token_timeout: int = 60
+    skip_prompt: bool = True
+    skip_special_tokens: bool = True
+    chunk_delay_ms: int = 20
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+    
+    @classmethod
+    def get_field_metadata(cls) -> List[ConfigField]:
+        return [
+            ConfigField("enabled", ConfigCategory.LLM,
+                       "Enable streaming responses", "bool", True),
+            ConfigField("token_timeout", ConfigCategory.LLM,
+                       "Timeout per token (seconds)", "int", 60, 10, 300),
+            ConfigField("chunk_delay_ms", ConfigCategory.LLM,
+                       "Delay between chunks (ms)", "int", 20, 0, 100),
+        ]
+
+
+# =============================================================================
+# Model Registry Configuration
+# =============================================================================
+
+@dataclass
+class ModelsSettings:
+    """Model registry settings."""
+    active: str = "qwen3-4b"
+    registry: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        """Initialize with default model if empty."""
+        if not self.registry:
+            self.registry = {
+                "qwen3-4b": {
+                    "family": "qwen",
+                    "path": "./offline_models/qwen3-4b",
+                    "thinking_tags": {
+                        "start": ["<think>", "<thinking>", "<σκέψη>"],
+                        "end": ["</think>", "</thinking>", "</σκέψη>"]
+                    },
+                    "response_tags": {
+                        "start": ["<response>", "<απάντηση>"],
+                        "end": ["</response>", "</απάντηση>"]
+                    },
+                    "stop_tokens": ["<|im_end|>", "<|endoftext|>"],
+                    "prompt_template": "qwen_chat",
+                    "supports_thinking": True,
+                    "trust_remote_code": True
+                }
+            }
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "active": self.active,
+            "registry": self.registry
+        }
+    
+    def get_active_model_config(self) -> Optional[Dict[str, Any]]:
+        """Get configuration for active model."""
+        return self.registry.get(self.active)
+    
+    @classmethod
+    def get_field_metadata(cls) -> List[ConfigField]:
+        return [
+            ConfigField("active", ConfigCategory.LLM,
+                       "Active model ID", "str", "qwen3-4b",
+                       requires_restart=True),
+        ]
+
+
+# =============================================================================
+# Prompt Templates Configuration
+# =============================================================================
+
+@dataclass
+class PromptTemplatesSettings:
+    """Prompt template registry settings."""
+    templates: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        """Initialize with default templates."""
+        if not self.templates:
+            self.templates = {
+                "qwen_chat": {
+                    "system_format": "<|im_start|>system\n{system}<|im_end|>\n",
+                    "user_format": "<|im_start|>user\n{user}<|im_end|>\n",
+                    "assistant_format": "<|im_start|>assistant\n",
+                    "supports_multi_turn": True
+                },
+                "llama3_instruct": {
+                    "system_format": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system}<|eot_id|>",
+                    "user_format": "<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|>",
+                    "assistant_format": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+                    "supports_multi_turn": True
+                },
+                "default": {
+                    "system_format": "System: {system}\n\n",
+                    "user_format": "User: {user}\n\n",
+                    "assistant_format": "Assistant: ",
+                    "supports_multi_turn": True
+                }
+            }
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {"templates": self.templates}
+    
+    def get_template(self, name: str) -> Optional[Dict[str, Any]]:
+        """Get template by name."""
+        return self.templates.get(name, self.templates.get("default"))
+
+
+# =============================================================================
+# Response Cleaning Configuration
+# =============================================================================
+
+@dataclass
+class ResponseCleaningSettings:
+    """Response cleaning settings."""
+    enabled: bool = True
+    clean_thinking: bool = True
+    clean_xml_tags: bool = True
+    clean_meta_commentary: bool = True
+    normalize_whitespace: bool = True
+    custom_patterns: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+    
+    @classmethod
+    def get_field_metadata(cls) -> List[ConfigField]:
+        return [
+            ConfigField("enabled", ConfigCategory.LLM,
+                       "Enable response cleaning", "bool", True),
+            ConfigField("clean_thinking", ConfigCategory.LLM,
+                       "Remove thinking blocks", "bool", True),
+            ConfigField("clean_xml_tags", ConfigCategory.LLM,
+                       "Remove XML/HTML tags", "bool", True),
+            ConfigField("clean_meta_commentary", ConfigCategory.LLM,
+                       "Remove meta-commentary", "bool", True),
+        ]
+
+
+# =============================================================================
+# Localization Configuration
+# =============================================================================
+
+@dataclass
+class LocalizationSettings:
+    """Localization settings."""
+    default_language: str = "greek"
+    force_greek_responses: bool = True
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
