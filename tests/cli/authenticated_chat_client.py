@@ -117,7 +117,11 @@ class AuthenticatedChatClient:
     
     def login(self, u, p):
         try:
-            r = requests.post(f"{self.base_url}/auth/login", data={"username":u,"password":p})
+            r = requests.post(
+                f"{self.base_url}/auth/login",
+                json={"username": u, "password": p},  # Use json= instead of data=
+                headers={"Content-Type": "application/json"}
+            )
             if r.ok:
                 d = r.json()
                 self.token = d["access_token"]
