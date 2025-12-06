@@ -2,11 +2,13 @@
 """
 FastAPI application entry point with authentication, streaming, and Greek language support.
 FIXED: Network file indexing now properly triggers RAG ingestion.
+FIXED: Streaming now saves messages to database.
 """
 
 import asyncio
 import json
-from fastapi import FastAPI, HTTPException, status, Query
+import re
+from fastapi import FastAPI, HTTPException, status, Query, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -16,7 +18,7 @@ from pathlib import Path
 
 # Import API routers
 from app.api import config_router
-from app.api.auth_routes import router as auth_router
+from app.api.auth_routes import router as auth_router, get_current_user_dep
 from app.api.chat_routes_authenticated import router as chat_router
 
 # Import models
@@ -234,11 +236,6 @@ app.include_router(config_router)
 # Streaming Endpoints
 # =============================================================================
 
-from pydantic import BaseModel
-from typing import Optional
-import json
-import asyncio
-from typing import Optional
 from queue import Queue, Empty
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
@@ -256,15 +253,28 @@ async def generate_streaming_response(
     content: str,
     chat_id: Optional[str] = None,
     include_thinking: bool = False,
-    max_tokens: int = 256
+    max_tokens: int = 256,
+    user_id: Optional[int] = None
 ):
     """
     TRUE streaming using the EXISTING agent's model.
-    
-    Key fix: Uses agent.llm_provider.model/tokenizer instead of loading new model.
+    NOW WITH MESSAGE PERSISTENCE TO DATABASE.
     """
     from app.agent.integration import get_agent
     from app.core.interfaces import Context
+    
+    # =========================================================================
+    # SAVE USER MESSAGE TO DATABASE FIRST
+    # =========================================================================
+    if chat_id and user_id:
+        try:
+            storage.add_message(chat_id, "user", content)
+            logger.info(f"💬 Saved user message to chat {chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to save user message: {e}")
+    
+    # Collect all response tokens for saving at the end
+    full_response_tokens = []
     
     try:
         # Phase 1: Acknowledge
@@ -272,11 +282,24 @@ async def generate_streaming_response(
         
         agent = get_agent()
         
-        # Build context
+        # Build context with chat history from database
+        chat_history = []
+        if chat_id:
+            try:
+                messages = storage.get_messages(chat_id, limit=10)
+                # Exclude the message we just added (last one)
+                chat_history = [
+                    {"role": msg["role"], "content": msg["content"]}
+                    for msg in messages[:-1] if messages
+                ]
+                logger.info(f"📜 Loaded {len(chat_history)} messages from history")
+            except Exception as e:
+                logger.warning(f"Could not load chat history: {e}")
+        
         context = Context(
             query=content,
-            chat_history=[],
-            metadata={"chat_id": chat_id},
+            chat_history=chat_history,
+            metadata={"chat_id": chat_id, "user_id": user_id},
             debug_info=[]
         )
         
@@ -300,7 +323,6 @@ async def generate_streaming_response(
         prompt = context.metadata.get("prompt", content)
         
         # Add instruction for thinking language and response language
-        # Qwen3 /think mode will be enabled, but we instruct it on language
         thinking_instruction = """
 
 <instructions>
@@ -328,7 +350,6 @@ Process:
         yield f"data: {json.dumps({'type': 'status', 'data': '💭 Δημιουργία απάντησης...'}, ensure_ascii=False)}\n\n"
         logger.info("📤 Sent 'generating' status")
         
-        # Force flush by yielding a small delay
         await asyncio.sleep(0.1)
         
         yield f"data: {json.dumps({'type': 'response_start', 'data': ''}, ensure_ascii=False)}\n\n"
@@ -341,20 +362,17 @@ Process:
         
         # Handle different provider types
         if hasattr(llm, 'provider') and llm.provider is not None:
-            # PreWarmedLLMProvider wraps FastLocalModelProvider
             inner_provider = llm.provider
             inner_provider._ensure_initialized()
             model = inner_provider.model
             tokenizer = inner_provider.tokenizer
             logger.info("Using model from PreWarmedLLMProvider")
         elif hasattr(llm, '_ensure_initialized'):
-            # Direct provider with _ensure_initialized
             llm._ensure_initialized()
             model = llm.model
             tokenizer = llm.tokenizer
             logger.info("Using model from direct provider")
         elif hasattr(llm, 'model') and llm.model is not None:
-            # Already initialized provider
             model = llm.model
             tokenizer = llm.tokenizer
             logger.info("Using already-initialized model")
@@ -372,28 +390,21 @@ Process:
                 from transformers import TextIteratorStreamer
                 
                 logger.info(f"🔧 Starting generation thread...")
-                logger.info(f"   Model type: {type(model).__name__}")
-                logger.info(f"   Max tokens: {max_tokens}")
                 
-                # Tokenize
                 inputs = tokenizer(prompt, return_tensors="pt")
                 input_len = inputs["input_ids"].shape[1]
                 logger.info(f"   Input tokens: {input_len}")
                 
                 if torch.cuda.is_available():
                     inputs = {k: v.cuda() for k, v in inputs.items()}
-                    logger.info(f"   Moved to CUDA")
                 
-                # Create streamer
                 streamer = TextIteratorStreamer(
                     tokenizer,
                     skip_prompt=True,
                     skip_special_tokens=True,
-                    timeout=300  # 5 min timeout per token
+                    timeout=300
                 )
-                logger.info(f"   Streamer created")
                 
-                # Generation config
                 gen_kwargs = {
                     **inputs,
                     "streamer": streamer,
@@ -405,30 +416,19 @@ Process:
                     "pad_token_id": tokenizer.eos_token_id,
                 }
                 
-                # Start generation in background
-                logger.info(f"   Starting model.generate()...")
-                
                 def run_generate():
                     try:
                         model.generate(**gen_kwargs)
-                        logger.info(f"   model.generate() completed")
                     except Exception as e:
                         logger.error(f"   model.generate() failed: {e}")
-                        import traceback
-                        traceback.print_exc()
                 
                 gen_thread = Thread(target=run_generate)
                 gen_thread.start()
                 
-                # Stream tokens from streamer
                 token_count = 0
-                logger.info(f"   Waiting for tokens from streamer...")
-                
                 for token in streamer:
                     token_count += 1
                     token_queue.put(("token", token))
-                    if token_count <= 5:
-                        logger.info(f"   Token {token_count}: '{token[:20]}...'")
                 
                 logger.info(f"   Streamer finished. Total tokens: {token_count}")
                 gen_thread.join(timeout=10)
@@ -436,12 +436,9 @@ Process:
                 
             except Exception as e:
                 logger.error(f"Generation error: {e}")
-                import traceback
-                traceback.print_exc()
                 token_queue.put(("error", str(e)))
             finally:
                 generation_done["done"] = True
-                logger.info(f"   Generation thread finished")
         
         # Start generation thread
         gen_thread = Thread(target=generate_with_streamer, daemon=True)
@@ -462,12 +459,16 @@ Process:
                     if not data or not data.strip():
                         continue
                     
-                    # Detect thinking tags (handle partial matches too)
+                    # =========================================================
+                    # COLLECT ALL TOKENS FOR SAVING (including thinking)
+                    # =========================================================
+                    full_response_tokens.append(data)
+                    
+                    # Detect thinking tags
                     if "<think>" in data or data.strip().startswith("<think"):
                         in_thinking = True
                         if include_thinking:
                             yield f"data: {json.dumps({'type': 'thinking_start', 'data': ''}, ensure_ascii=False)}\n\n"
-                        # Don't output the tag itself
                         data = data.replace("<think>", "").replace("<think", "")
                         if not data.strip():
                             continue
@@ -476,30 +477,26 @@ Process:
                         in_thinking = False
                         if include_thinking:
                             yield f"data: {json.dumps({'type': 'thinking_end', 'data': ''}, ensure_ascii=False)}\n\n"
-                        # Don't output the tag itself
                         data = data.replace("</think>", "").replace("</think", "")
                         if not data.strip():
                             continue
                     
-                    # Skip language markers and garbage
+                    # Skip language markers
                     if data.strip() in ['/zh', '/en', '/el', '/', '//', '/no_think', '/think']:
                         continue
                     
-                    # Filter Chinese characters - skip tokens that are mostly Chinese
-                    # This applies to both thinking and response (we want English/Greek thinking)
+                    # Filter Chinese characters
                     chinese_chars = sum(1 for c in data if '\u4e00' <= c <= '\u9fff')
                     if chinese_chars > 0 and chinese_chars > len(data.strip()) * 0.3:
-                        logger.debug(f"   Filtering Chinese: {data[:30]}")
                         continue
                     
-                    # Stream token
+                    # Stream token (skip thinking unless include_thinking)
                     if in_thinking:
                         if include_thinking:
                             yield f"data: {json.dumps({'type': 'token', 'data': data}, ensure_ascii=False)}\n\n"
                     else:
                         yield f"data: {json.dumps({'type': 'token', 'data': data}, ensure_ascii=False)}\n\n"
                     
-                    # Give event loop a chance
                     await asyncio.sleep(0.01)
                 
                 elif event_type == "done":
@@ -512,11 +509,34 @@ Process:
             except Empty:
                 if generation_done["done"]:
                     break
-                # Send heartbeat to keep connection alive
                 yield f"data: {json.dumps({'type': 'heartbeat', 'data': ''}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.1)
         
         gen_thread.join(timeout=5)
+        
+        # =====================================================================
+        # SAVE ASSISTANT RESPONSE TO DATABASE
+        # =====================================================================
+        if chat_id and user_id and full_response_tokens:
+            try:
+                # Join all tokens
+                complete_response = ''.join(full_response_tokens)
+                
+                # Remove thinking content for saved response
+                complete_response = re.sub(r'<think>.*?</think>', '', complete_response, flags=re.DOTALL)
+                complete_response = re.sub(r'<think.*', '', complete_response, flags=re.DOTALL)
+                
+                # Clean up language markers and extra whitespace
+                complete_response = re.sub(r'/(zh|en|el|think|no_think)\b', '', complete_response)
+                complete_response = complete_response.strip()
+                
+                if complete_response:
+                    storage.add_message(chat_id, "assistant", complete_response)
+                    logger.info(f"💬 Saved assistant response to chat {chat_id} ({len(complete_response)} chars)")
+                else:
+                    logger.warning(f"⚠️ Empty response, not saving to database")
+            except Exception as e:
+                logger.error(f"Failed to save assistant response: {e}")
         
         logger.info(f"✅ Streamed {token_count} tokens")
         
@@ -530,20 +550,27 @@ Process:
         yield f"data: {json.dumps({'type': 'error', 'data': str(e)}, ensure_ascii=False)}\n\n"
 
 
-
-
-
-
-# Updated endpoint
 @app.post("/stream/chat")
-async def stream_chat_post(request: StreamingChatRequest):
-    """Stream chat with true real-time token output."""
+async def stream_chat_post(
+    request: StreamingChatRequest,
+    current_user: dict = Depends(get_current_user_dep)
+):
+    """Stream chat with message persistence."""
+    # Verify chat belongs to user
+    if request.chat_id:
+        chat = storage.get_chat(request.chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        if chat["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+    
     return StreamingResponse(
         generate_streaming_response(
             content=request.content,
             chat_id=request.chat_id,
             include_thinking=request.include_thinking,
-            max_tokens=request.max_tokens or 256
+            max_tokens=request.max_tokens or 256,
+            user_id=current_user["id"]
         ),
         media_type="text/event-stream",
         headers={
@@ -658,7 +685,6 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    # Get RAG status
     rag_status = "unknown"
     try:
         from app.core.network_rag_integration import get_network_integrator

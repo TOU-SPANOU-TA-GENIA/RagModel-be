@@ -68,10 +68,61 @@ class AgentResponse(BaseModel):
     message_id: int
     timestamp: str
 
-
+class UpdateChatRequest(BaseModel):
+    """Request to update chat properties."""
+    title: Optional[str] = Field(None, max_length=200)
+    
 # =============================================================================
 # Chat Management Endpoints
 # =============================================================================
+# Add this endpoint to chat_routes_authenticated.py
+
+@router.patch("/{chat_id}")
+async def update_chat(
+    chat_id: str,
+    request: UpdateChatRequest,
+    user: dict = Depends(get_current_user_dep)
+):
+    """
+    Update chat properties (title).
+    
+    **Headers:**
+    - Authorization: Bearer <token>
+    
+    **Returns:**
+    - Updated chat info
+    """
+    # Verify chat belongs to user
+    chat = storage.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat not found"
+        )
+    
+    if chat["user_id"] != user["id"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this chat"
+        )
+    
+    try:
+        if request.title is not None:
+            storage.update_chat_title(chat_id, request.title)
+        
+        updated_chat = storage.get_chat(chat_id)
+        return {
+            "id": updated_chat["id"],
+            "title": updated_chat["title"],
+            "updated_at": updated_chat["updated_at"]
+        }
+    
+    except Exception as e:
+        logger.error(f"Failed to update chat: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update chat"
+        )
 
 @router.post("/", response_model=ChatSummary, status_code=status.HTTP_201_CREATED)
 async def create_chat(
