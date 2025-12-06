@@ -239,7 +239,7 @@ app.include_router(config_router)
 from queue import Queue, Empty
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
-
+import time 
 
 class StreamingChatRequest(BaseModel):
     """Request for streaming chat."""
@@ -247,6 +247,41 @@ class StreamingChatRequest(BaseModel):
     chat_id: Optional[str] = None
     include_thinking: bool = False
     max_tokens: Optional[int] = 256 
+
+# Token patterns that indicate end of meaningful generation
+EOS_PATTERNS = {'</s>', '<|im_end|>', '<|endoftext|>', '<|end|>', '[EOS]', '[PAD]', '<pad>', '<eos>'}
+LANGUAGE_MARKERS = {'/zh', '/en', '/el', '/no_think', '/think', '//', '/'}
+JUNK_PATTERNS = {'</s>', '<s>', '<pad>', '<unk>'}
+
+
+def is_junk_token(token: str) -> bool:
+    """Check if token is junk/padding that should be filtered."""
+    stripped = token.strip()
+    
+    # Empty
+    if not stripped:
+        return True
+    
+    # Language markers
+    if stripped in LANGUAGE_MARKERS:
+        return True
+    
+    # EOS/padding tokens
+    if stripped in EOS_PATTERNS or stripped in JUNK_PATTERNS:
+        return True
+    
+    # Chinese characters (Qwen's default thinking)
+    chinese_count = sum(1 for c in stripped if '\u4e00' <= c <= '\u9fff')
+    if chinese_count > 0 and chinese_count > len(stripped) * 0.3:
+        return True
+    
+    return False
+
+
+def is_eos_token(token: str) -> bool:
+    """Check if token is an end-of-sequence marker."""
+    stripped = token.strip()
+    return stripped in EOS_PATTERNS
 
 
 async def generate_streaming_response(
@@ -259,9 +294,14 @@ async def generate_streaming_response(
     """
     TRUE streaming using the EXISTING agent's model.
     NOW WITH MESSAGE PERSISTENCE TO DATABASE.
+    FIXED: Early stopping on EOS tokens, no trash padding.
     """
     from app.agent.integration import get_agent
     from app.core.interfaces import Context
+    from app.db.storage import storage
+    from app.utils.logger import setup_logger
+    
+    logger = setup_logger(__name__)
     
     # =========================================================================
     # SAVE USER MESSAGE TO DATABASE FIRST
@@ -322,46 +362,28 @@ async def generate_streaming_response(
         
         prompt = context.metadata.get("prompt", content)
         
-        # Add instruction for thinking language and response language
+        # Add instruction for thinking language
         thinking_instruction = """
 
 <instructions>
-THINKING LANGUAGE: When using <think> tags, think in English or Greek - NOT Chinese.
-RESPONSE LANGUAGE: Your final response MUST be in Greek (Ελληνικά).
-
-Process:
-1. Think through the problem (in English or Greek)
-2. Respond to the user in Greek
+THINKING LANGUAGE: When using <think> tags, think in English or Greek - NEVER Chinese.
+RESPONSE LANGUAGE: Always respond in Greek.
+BREVITY: Stop when the answer is complete. Short questions = short answers.
 </instructions>
 
 """
+        prompt = thinking_instruction + prompt
         
-        # Add /think at the end to enable thinking mode
-        prompt = prompt + thinking_instruction + "/think"
+        logger.info(f"📝 Prompt prepared ({len(prompt)} chars)")
+        yield f"data: {json.dumps({'type': 'status', 'data': '💭 Σκέψη...'}, ensure_ascii=False)}\n\n"
         
-        logger.info(f"📝 Prompt ready: {len(prompt)} chars (thinking enabled)")
-        
-        # Check for RAG context
-        rag_context = context.metadata.get("rag_context", "")
-        if rag_context:
-            yield f"data: {json.dumps({'type': 'status', 'data': '📚 Βρέθηκαν σχετικά έγγραφα'}, ensure_ascii=False)}\n\n"
-        
-        # Phase 3: STREAMING GENERATION using existing model
-        yield f"data: {json.dumps({'type': 'status', 'data': '💭 Δημιουργία απάντησης...'}, ensure_ascii=False)}\n\n"
-        logger.info("📤 Sent 'generating' status")
-        
-        await asyncio.sleep(0.1)
-        
-        yield f"data: {json.dumps({'type': 'response_start', 'data': ''}, ensure_ascii=False)}\n\n"
-        logger.info("📤 Sent 'response_start'")
-        
-        await asyncio.sleep(0.1)
-        
-        # Get the EXISTING model from agent
+        # Phase 3: Token-by-token streaming
+        # Get the model/tokenizer from the LLM provider
         llm = agent.llm_provider
         
         # Handle different provider types
         if hasattr(llm, 'provider') and llm.provider is not None:
+            # PreWarmedLLMProvider wraps FastLocalModelProvider
             inner_provider = llm.provider
             inner_provider._ensure_initialized()
             model = inner_provider.model
@@ -379,12 +401,10 @@ Process:
         else:
             raise RuntimeError(f"Cannot get model from provider type: {type(llm).__name__}")
         
-        # Queue for streaming
         token_queue = Queue()
-        generation_done = {"done": False}
+        generation_done = {"done": False, "eos_hit": False}
         
         def generate_with_streamer():
-            """Generate tokens using the existing model with TextIteratorStreamer."""
             try:
                 import torch
                 from transformers import TextIteratorStreamer
@@ -401,7 +421,7 @@ Process:
                 streamer = TextIteratorStreamer(
                     tokenizer,
                     skip_prompt=True,
-                    skip_special_tokens=True,
+                    skip_special_tokens=False,  # CHANGED: Don't skip so we can detect EOS
                     timeout=300
                 )
                 
@@ -414,6 +434,7 @@ Process:
                     "top_p": 0.9,
                     "repetition_penalty": 1.1,
                     "pad_token_id": tokenizer.eos_token_id,
+                    "eos_token_id": tokenizer.eos_token_id,
                 }
                 
                 def run_generate():
@@ -426,11 +447,23 @@ Process:
                 gen_thread.start()
                 
                 token_count = 0
+                consecutive_eos = 0
+                
                 for token in streamer:
                     token_count += 1
-                    token_queue.put(("token", token))
+                    
+                    # Check for EOS token - signal early stop
+                    if is_eos_token(token):
+                        consecutive_eos += 1
+                        if consecutive_eos >= 1:  # Stop on first real EOS
+                            logger.info(f"   EOS detected at token {token_count}, stopping early")
+                            generation_done["eos_hit"] = True
+                            break
+                    else:
+                        consecutive_eos = 0
+                        token_queue.put(("token", token))
                 
-                logger.info(f"   Streamer finished. Total tokens: {token_count}")
+                logger.info(f"   Streamer finished. Total tokens: {token_count}, EOS hit: {generation_done['eos_hit']}")
                 gen_thread.join(timeout=10)
                 token_queue.put(("done", None))
                 
@@ -446,6 +479,7 @@ Process:
         
         # Stream tokens as they arrive
         in_thinking = False
+        thinking_start_time = 0
         token_count = 0
         
         while True:
@@ -455,45 +489,34 @@ Process:
                 if event_type == "token":
                     token_count += 1
                     
-                    # Skip empty tokens
-                    if not data or not data.strip():
+                    # Skip junk tokens
+                    if is_junk_token(data):
                         continue
                     
-                    # =========================================================
-                    # COLLECT ALL TOKENS FOR SAVING (including thinking)
-                    # =========================================================
+                    # Collect for saving (including thinking)
                     full_response_tokens.append(data)
                     
                     # Detect thinking tags
                     if "<think>" in data or data.strip().startswith("<think"):
                         in_thinking = True
-                        if include_thinking:
-                            yield f"data: {json.dumps({'type': 'thinking_start', 'data': ''}, ensure_ascii=False)}\n\n"
+                        thinking_start_time = time.time()
+                        yield f"data: {json.dumps({'type': 'thinking_start', 'data': ''}, ensure_ascii=False)}\n\n"
                         data = data.replace("<think>", "").replace("<think", "")
                         if not data.strip():
                             continue
                     
                     if "</think>" in data or data.strip().endswith("</think"):
                         in_thinking = False
-                        if include_thinking:
-                            yield f"data: {json.dumps({'type': 'thinking_end', 'data': ''}, ensure_ascii=False)}\n\n"
+                        thinking_duration = int(time.time() - thinking_start_time) if thinking_start_time else 0
+                        yield f"data: {json.dumps({'type': 'thinking_end', 'data': str(thinking_duration)}, ensure_ascii=False)}\n\n"
                         data = data.replace("</think>", "").replace("</think", "")
                         if not data.strip():
                             continue
                     
-                    # Skip language markers
-                    if data.strip() in ['/zh', '/en', '/el', '/', '//', '/no_think', '/think']:
-                        continue
-                    
-                    # Filter Chinese characters
-                    chinese_chars = sum(1 for c in data if '\u4e00' <= c <= '\u9fff')
-                    if chinese_chars > 0 and chinese_chars > len(data.strip()) * 0.3:
-                        continue
-                    
-                    # Stream token (skip thinking unless include_thinking)
+                    # Stream token with appropriate type
                     if in_thinking:
-                        if include_thinking:
-                            yield f"data: {json.dumps({'type': 'token', 'data': data}, ensure_ascii=False)}\n\n"
+                        # Send thinking tokens with special type so frontend can handle them
+                        yield f"data: {json.dumps({'type': 'thinking_token', 'data': data}, ensure_ascii=False)}\n\n"
                     else:
                         yield f"data: {json.dumps({'type': 'token', 'data': data}, ensure_ascii=False)}\n\n"
                     
@@ -526,8 +549,9 @@ Process:
                 complete_response = re.sub(r'<think>.*?</think>', '', complete_response, flags=re.DOTALL)
                 complete_response = re.sub(r'<think.*', '', complete_response, flags=re.DOTALL)
                 
-                # Clean up language markers and extra whitespace
+                # Clean up
                 complete_response = re.sub(r'/(zh|en|el|think|no_think)\b', '', complete_response)
+                complete_response = re.sub(r'</s>', '', complete_response)
                 complete_response = complete_response.strip()
                 
                 if complete_response:
