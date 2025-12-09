@@ -3,6 +3,7 @@
 FastAPI application entry point with authentication, streaming, and Greek language support.
 FIXED: Network file indexing now properly triggers RAG ingestion.
 FIXED: Streaming now saves messages to database.
+FIXED: File upload/download support added.
 """
 
 import asyncio
@@ -12,7 +13,7 @@ from fastapi import FastAPI, HTTPException, status, Query, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List  # FIXED: Import List from typing, not ast
 from pydantic import BaseModel
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from pathlib import Path
 from app.api import config_router
 from app.api.auth_routes import router as auth_router, get_current_user_dep
 from app.api.chat_routes_authenticated import router as chat_router
+from app.api.file_routes import router as file_router  # NEW: File routes
 
 # Import models
 from app.api import HealthResponse
@@ -33,6 +35,9 @@ from app.core import startup_manager, ChatNotFoundException, RAGException
 # Import database initialization
 from app.db.init_db import init_database
 from app.db.storage import storage
+
+# Import file service
+from app.services.file_service import file_service  # NEW: File service
 
 # Import utilities
 from app.utils.logger import setup_logger
@@ -167,6 +172,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"   Language: Greek (Ελληνικά)")
         logger.info(f"   Streaming: Enabled")
         logger.info(f"   Thinking tags: Enabled")
+        logger.info(f"   File upload: {'✅ Available' if file_service.is_available else '⚠️ Not available'}")
         
         db_path = Path(PATHS.data_dir) / 'app.db'
         logger.info(f"   Database: SQLite at {db_path}")
@@ -201,9 +207,9 @@ async def lifespan(app: FastAPI):
 # =============================================================================
 
 app = FastAPI(
-    title="RagModel-be API",
-    description="AI Agent API με υποστήριξη Ελληνικών, RAG, και streaming responses",
-    version="2.1.0",
+    title="Prometheus AI API",
+    description="AI Agent API με υποστήριξη Ελληνικών, RAG, file upload, και streaming responses",
+    version="2.2.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc"
@@ -230,6 +236,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(config_router)
+app.include_router(file_router)  # NEW: File routes
 
 
 # =============================================================================
@@ -241,17 +248,58 @@ from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
 import time 
 
+
 class StreamingChatRequest(BaseModel):
     """Request for streaming chat."""
     content: str
     chat_id: Optional[str] = None
     include_thinking: bool = False
-    max_tokens: Optional[int] = 256 
+    max_tokens: Optional[int] = None
+    file_ids: Optional[List[str]] = None  # File attachment IDs
+
 
 # Token patterns that indicate end of meaningful generation
-EOS_PATTERNS = {'</s>', '<|im_end|>', '<|endoftext|>', '<|end|>', '[EOS]', '[PAD]', '<pad>', '<eos>'}
+STOP_TOKENS = {
+    '<|im_end|>',
+    '<|endoftext|>',
+    '<|im_start|>',
+    '</s>',
+    '<s>',
+    '[PAD]',
+    '<pad>',
+    '<eos>',
+    '<|end|>',
+    '[EOS]',
+}
+
 LANGUAGE_MARKERS = {'/zh', '/en', '/el', '/no_think', '/think', '//', '/'}
-JUNK_PATTERNS = {'</s>', '<s>', '<pad>', '<unk>'}
+
+
+def should_filter_token(token: str) -> bool:
+    """Check if token should be filtered from output."""
+    token_stripped = token.strip()
+    
+    # Check exact matches
+    if token_stripped in STOP_TOKENS:
+        return True
+    
+    # Check if token contains stop tokens
+    for stop in STOP_TOKENS:
+        if stop in token:
+            return True
+    
+    return False
+
+
+def clean_token_for_display(token: str) -> str:
+    """Clean token before displaying to user."""
+    result = token
+    
+    # Remove stop tokens from within the token
+    for stop in STOP_TOKENS:
+        result = result.replace(stop, '')
+    
+    return result
 
 
 def is_junk_token(token: str) -> bool:
@@ -267,7 +315,7 @@ def is_junk_token(token: str) -> bool:
         return True
     
     # EOS/padding tokens
-    if stripped in EOS_PATTERNS or stripped in JUNK_PATTERNS:
+    if stripped in STOP_TOKENS:
         return True
     
     # Chinese characters (Qwen's default thinking)
@@ -281,34 +329,50 @@ def is_junk_token(token: str) -> bool:
 def is_eos_token(token: str) -> bool:
     """Check if token is an end-of-sequence marker."""
     stripped = token.strip()
-    return stripped in EOS_PATTERNS
+    return stripped in STOP_TOKENS
 
 
 async def generate_streaming_response(
     content: str,
-    chat_id: Optional[str] = None,
-    include_thinking: bool = False,
-    max_tokens: int = 256,
-    user_id: Optional[int] = None
+    chat_id: Optional[str],
+    include_thinking: bool,
+    max_tokens: int,
+    user_id: int,
+    file_ids: Optional[List[str]] = None
 ):
     """
     TRUE streaming using the EXISTING agent's model.
     NOW WITH MESSAGE PERSISTENCE TO DATABASE.
     FIXED: Early stopping on EOS tokens, no trash padding.
+    FIXED: File context support.
     """
+    
+    # Build file context if files provided
+    file_context = ""
+    if file_ids:
+        for file_id in file_ids:
+            file_meta = file_service.get_metadata(file_id)
+            if file_meta and file_meta.extracted_content:
+                file_context += f"""
+<uploaded_file name="{file_meta.original_name}" type="{file_meta.content_type}">
+{file_meta.extracted_content[:15000]}
+</uploaded_file>
+"""
+    
+    # Prepend file context to user message
+    original_content = content
+    if file_context:
+        content = f"{file_context}\n\nUser message: {content}"
+        
     from app.agent.integration import get_agent
     from app.core.interfaces import Context
-    from app.db.storage import storage
-    from app.utils.logger import setup_logger
-    
-    logger = setup_logger(__name__)
     
     # =========================================================================
     # SAVE USER MESSAGE TO DATABASE FIRST
     # =========================================================================
     if chat_id and user_id:
         try:
-            storage.add_message(chat_id, "user", content)
+            storage.add_message(chat_id, "user", original_content)
             logger.info(f"💬 Saved user message to chat {chat_id}")
         except Exception as e:
             logger.error(f"Failed to save user message: {e}")
@@ -344,7 +408,7 @@ async def generate_streaming_response(
         )
         
         # Phase 2: Preprocessing (RAG, intent)
-        logger.info(f"📥 Query: {content[:100]}...")
+        logger.info(f"📥 Query: {original_content[:100]}...")
         
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -421,7 +485,7 @@ BREVITY: Stop when the answer is complete. Short questions = short answers.
                 streamer = TextIteratorStreamer(
                     tokenizer,
                     skip_prompt=True,
-                    skip_special_tokens=False,  # CHANGED: Don't skip so we can detect EOS
+                    skip_special_tokens=False,  # Don't skip so we can detect EOS
                     timeout=300
                 )
                 
@@ -493,6 +557,11 @@ BREVITY: Stop when the answer is complete. Short questions = short answers.
                     if is_junk_token(data):
                         continue
                     
+                    # Clean the token
+                    data = clean_token_for_display(data)
+                    if not data:
+                        continue
+                    
                     # Collect for saving (including thinking)
                     full_response_tokens.append(data)
                     
@@ -549,9 +618,11 @@ BREVITY: Stop when the answer is complete. Short questions = short answers.
                 complete_response = re.sub(r'<think>.*?</think>', '', complete_response, flags=re.DOTALL)
                 complete_response = re.sub(r'<think.*', '', complete_response, flags=re.DOTALL)
                 
-                # Clean up
+                # Clean up language markers and stop tokens
                 complete_response = re.sub(r'/(zh|en|el|think|no_think)\b', '', complete_response)
-                complete_response = re.sub(r'</s>', '', complete_response)
+                for stop in STOP_TOKENS:
+                    complete_response = complete_response.replace(stop, '')
+                
                 complete_response = complete_response.strip()
                 
                 if complete_response:
@@ -579,7 +650,7 @@ async def stream_chat_post(
     request: StreamingChatRequest,
     current_user: dict = Depends(get_current_user_dep)
 ):
-    """Stream chat with message persistence."""
+    """Stream chat with message persistence and file support."""
     # Verify chat belongs to user
     if request.chat_id:
         chat = storage.get_chat(request.chat_id)
@@ -593,8 +664,9 @@ async def stream_chat_post(
             content=request.content,
             chat_id=request.chat_id,
             include_thinking=request.include_thinking,
-            max_tokens=request.max_tokens or 256,
-            user_id=current_user["id"]
+            max_tokens=request.max_tokens or 4096,  # FIXED: Higher default
+            user_id=current_user["id"],
+            file_ids=request.file_ids  # FIXED: Pass file_ids
         ),
         media_type="text/event-stream",
         headers={
@@ -681,8 +753,8 @@ async def rag_exception_handler(request, exc):
 async def root():
     """Root endpoint - API information."""
     return {
-        "name": "RagModel-be API",
-        "version": "2.1.0",
+        "name": "Prometheus AI API",
+        "version": "2.2.0",
         "language": "Greek (Ελληνικά)",
         "status": "running",
         "features": {
@@ -692,12 +764,15 @@ async def root():
             "streaming": True,
             "thinking_tags": True,
             "greek_language": True,
-            "network_filesystem": True
+            "network_filesystem": True,
+            "file_upload": True,
+            "file_generation": True
         },
         "endpoints": {
             "auth": "/auth",
             "chats": "/chats",
             "stream": "/stream/chat",
+            "files": "/files",
             "config": "/config",
             "rag_status": "/rag/status",
             "docs": "/docs",
@@ -723,6 +798,7 @@ async def health_check():
         "status": "healthy",
         "database": "sqlite",
         "redis_available": storage.redis_available,
+        "file_storage": file_service.is_available,
         "language": "Greek",
         "streaming": True,
         "rag_status": rag_status

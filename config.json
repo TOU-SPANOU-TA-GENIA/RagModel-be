@@ -1,7 +1,7 @@
 {
   "llm": {
     "model_name": "./offline_models/qwen3-4b",
-    "max_new_tokens": 512,
+    "max_new_tokens": 4096,
     "trust_remote_code": true,
     "temperature": 0.7,
     "top_p": 0.9,
@@ -41,8 +41,8 @@
     "min_confidence_threshold": 0.5
   },
   "tools": {
-    "max_file_size_mb": 10,
-    "allowed_extensions": [".txt", ".md", ".text", ".json", ".yaml", ".yml", ".conf", ".config", ".cfg", ".log", ".py", ".sh", ".bash", ".xml", ".html", ".csv"],
+    "max_file_size_mb": 50,
+    "allowed_extensions": [".txt", ".md", ".text", ".json", ".yaml", ".yml", ".conf", ".config", ".cfg", ".log", ".py", ".sh", ".bash", ".xml", ".html", ".csv", ".pdf", ".docx", ".xlsx", ".pptx"],
     "allowed_commands": ["ls", "pwd", "echo", "date", "whoami", "df", "free"],
     "show_file_content": true,
     "file_content_format": "pretty",
@@ -65,37 +65,25 @@
   "paths": {
     "base_dir": ".",
     "data_dir": "data",
-    "index_dir": "data/index",
+    "index_dir": "faiss_index",
     "outputs_dir": "outputs",
     "offload_dir": "offload",
     "offline_models_dir": "offline_models"
   },
   "documents": {
-    "output_dir": "outputs/documents",
-    "default_font": "Arial",
-    "default_font_size": 11,
-    "title_font_size": 24,
-    "heading1_font_size": 18,
-    "heading2_font_size": 14,
-    "default_margin_inches": 1.0,
+    "default_format": "docx",
     "include_metadata": true,
-    "timestamp_format": "%Y-%m-%d %H:%M:%S",
-    "max_filename_length": 200
+    "template_dir": "templates"
   },
   "response": {
-    "clean_thinking_tags": true,
-    "clean_xml_tags": true,
-    "clean_meta_commentary": true,
-    "normalize_whitespace": true,
-    "max_response_length": null,
-    "language": "greek"
+    "max_response_length": 10000,
+    "use_markdown": true,
+    "include_sources": true,
+    "stream_responses": true
   },
   "network_filesystem": {
     "enabled": true,
-    "auto_index": true,
     "auto_start_monitoring": true,
-    "index_interval": 300,
-    "file_extensions": [".txt", ".md", ".pdf", ".docx"],
     "shares": [
       {
         "name": "shared_docs",
@@ -113,7 +101,7 @@
   },
   "streaming": {
     "enabled": true,
-    "token_timeout": 60,
+    "token_timeout": 120,
     "skip_prompt": true,
     "skip_special_tokens": true,
     "chunk_delay_ms": 20
@@ -124,6 +112,7 @@
     "clean_xml_tags": true,
     "clean_meta_commentary": true,
     "normalize_whitespace": true,
+    "stop_tokens": ["<|im_end|>", "<|endoftext|>", "</s>", "<|im_start|>", "[PAD]", "<pad>", "<eos>"],
     "custom_patterns": []
   },
   "models": {
