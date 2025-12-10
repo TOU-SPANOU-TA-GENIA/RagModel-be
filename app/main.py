@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, List  # FIXED: Import List from typing, not ast
 from pydantic import BaseModel
 from pathlib import Path
-
+from app.api.intelligence_routes import router as intelligence_router
 # Import API routers
 from app.api import config_router
 from app.api.auth_routes import router as auth_router, get_current_user_dep
@@ -237,7 +237,7 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(config_router)
 app.include_router(file_router)  # NEW: File routes
-
+app.include_router(intelligence_router)
 
 # =============================================================================
 # Streaming Endpoints

@@ -69,6 +69,15 @@ def create_default_tools() -> SimpleToolRegistry:
     except ImportError as e:
         logger.warning(f"Document generator unavailable: {e}")
     
+    # Register intelligence analysis tools
+    try:
+        from app.tools.intelligence_report_tool import IntelligenceReportTool, BatchDocumentAnalysisTool
+        registry.register(IntelligenceReportTool())
+        registry.register(BatchDocumentAnalysisTool())
+        logger.info("Registered intelligence analysis tools")
+    except ImportError as e:
+        logger.warning(f"Intelligence tools unavailable: {e}")
+    
     logger.info(f"Created tool registry with {len(registry.tools)} tools")
     return registry
 
@@ -91,6 +100,15 @@ def create_restricted_tool_registry() -> SimpleToolRegistry:
     
     safe_commands = ["ls", "pwd", "date", "whoami", "df", "free"]
     registry.register(ExecuteCommandTool(allowed_commands=safe_commands))
+    
+    # Intelligence tools are essential for military use
+    try:
+        from app.tools.intelligence_report_tool import IntelligenceReportTool, BatchDocumentAnalysisTool
+        registry.register(IntelligenceReportTool())
+        registry.register(BatchDocumentAnalysisTool())
+        logger.info("Registered intelligence analysis tools (military)")
+    except ImportError as e:
+        logger.warning(f"Intelligence tools unavailable: {e}")
     
     logger.info("Created military tool registry")
     return registry

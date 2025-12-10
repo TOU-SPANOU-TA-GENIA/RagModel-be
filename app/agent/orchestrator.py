@@ -225,47 +225,61 @@ class RAGRetrievalStep(PipelineStep):
 
 
 class PromptBuildStep(PipelineStep):
-    """Builds the final prompt for LLM."""
+    """Builds the final prompt for LLM - MEMORY OPTIMIZED for 6GB VRAM."""
+    
+    # Memory limits
+    MAX_RAG_CONTENT_PER_DOC = 300  # Was 500
+    MAX_RAG_DOCS = 2               # Was 3
+    MAX_HISTORY_MESSAGES = 3       # Was 5
+    MAX_MESSAGE_LENGTH = 150       # Was 200
+    MAX_SYSTEM_PROMPT = 800        # Truncate system prompt
     
     def __init__(self, system_prompt: str = None):
-        self.system_prompt = system_prompt or GREEK_SYSTEM_PROMPT
+        base_prompt = system_prompt or GREEK_SYSTEM_PROMPT
+        # Truncate system prompt if too long
+        if len(base_prompt) > self.MAX_SYSTEM_PROMPT:
+            self.system_prompt = base_prompt[:self.MAX_SYSTEM_PROMPT] + "..."
+        else:
+            self.system_prompt = base_prompt
     
     @property
     def name(self) -> str:
         return "Prompt Building"
     
     def process(self, context: Context) -> Context:
-        # Build knowledge base section if RAG results exist
+        # Build knowledge base section if RAG results exist (LIMITED)
         kb_section = ""
         rag_context = context.metadata.get("rag_context", [])
         
         if rag_context:
             kb_parts = []
-            for i, result in enumerate(rag_context, 1):
+            # Only use first N documents
+            for i, result in enumerate(rag_context[:self.MAX_RAG_DOCS], 1):
                 content = result.get("content", result.get("page_content", ""))
                 source = result.get("metadata", {}).get("source", "unknown")
-                kb_parts.append(f"[{i}] {source}:\n{content[:500]}")
+                # Truncate content
+                truncated = content[:self.MAX_RAG_CONTENT_PER_DOC]
+                kb_parts.append(f"[{i}] {source}:\n{truncated}")
             
-            kb_section = f"\n<knowledge_base>\n{''.join(kb_parts)}\n</knowledge_base>\n"
+            kb_section = f"\n<kb>\n{''.join(kb_parts)}\n</kb>\n"
         
-        # Build conversation history
+        # Build conversation history (LIMITED)
         history_section = ""
         if context.chat_history:
             history_parts = []
-            for msg in context.chat_history[-5:]:  # Last 5 messages
+            # Only last N messages
+            for msg in context.chat_history[-self.MAX_HISTORY_MESSAGES:]:
                 role = msg.get("role", "user")
-                content = msg.get("content", "")[:200]
+                content = msg.get("content", "")[:self.MAX_MESSAGE_LENGTH]
                 history_parts.append(f"{role}: {content}")
             
             if history_parts:
-                history_section = f"\n<conversation_history>\n{'chr(10)'.join(history_parts)}\n</conversation_history>\n"
+                history_section = f"\n<history>\n{chr(10).join(history_parts)}\n</history>\n"
         
-        # Construct final prompt with English thinking instruction
+        # Construct final prompt (COMPACT)
         prompt = f"""<|im_start|>system
 {self.system_prompt}
-{kb_section}
-{history_section}
-<|im_end|>
+{kb_section}{history_section}<|im_end|>
 <|im_start|>user
 {context.query}
 <|im_end|>
@@ -274,7 +288,6 @@ class PromptBuildStep(PipelineStep):
         
         context.metadata["prompt"] = prompt
         return context
-
 
 class LLMGenerationStep(PipelineStep):
     """Generates response using LLM with thinking extraction."""
