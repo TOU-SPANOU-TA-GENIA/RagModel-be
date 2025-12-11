@@ -5,6 +5,7 @@ FIXED:
 - max_new_tokens properly passed
 - Qwen3 /think mode enabled
 - Thinking in English, response in Greek
+- FILE SERVER DETECTION before RAG
 """
 
 import time
@@ -26,9 +27,6 @@ logger = setup_logger(__name__)
 # ============================================================================
 # Greek System Prompt with English Thinking Mode
 # ============================================================================
-
-# Qwen3 native thinking: Add /think at end of prompt to enable thinking mode
-# The model will output <think>...</think> before the response
 
 GREEK_SYSTEM_PROMPT = """Είσαι ένας εξυπηρετικός βοηθός AI που μιλάει Ελληνικά.
 
@@ -95,59 +93,51 @@ GREEK_SYSTEM_PROMPT = """Είσαι ένας εξυπηρετικός βοηθό
 class ResponseCleaner:
     """Cleans LLM responses by removing thinking blocks and artifacts."""
     
-    # Patterns for thinking blocks - Qwen3 uses <think>...</think>
     THINKING_PATTERNS = [
         (r'<think>.*?</think>', re.DOTALL | re.IGNORECASE),
         (r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE),
         (r'<σκέψη>.*?</σκέψη>', re.DOTALL | re.IGNORECASE),
     ]
     
-    # Tags to remove from output
     TAG_PATTERNS = [
         r'</?think>',
         r'</?thinking>',
         r'</?response>',
         r'<\|(?:system|user|assistant|end|im_start|im_end)\|>',
         r'</?s>',
-        r'</s>',  # Explicit EOS token
+        r'</s>',
         r'</?knowledge_base>',
         r'</?context>',
         r'</?current_query>',
         r'</?conversation_history>',
         r'</?response_instruction>',
-        r'/think',  # Remove the thinking trigger if it appears in output
+        r'/think',
         r'/no_think',
-        r'/(zh|en|el)',  # Language markers
+        r'/(zh|en|el)',
     ]
     
-    # Patterns that indicate junk/padding at end
     JUNK_PATTERNS = [
-        r'(\s*</s>)+\s*$',  # Repeated </s> at end
-        r'(\s*<pad>)+\s*$',  # Repeated <pad> at end
+        r'(\s*</s>)+\s*$',
+        r'(\s*<pad>)+\s*$',
         r'(\s*\[PAD\])+\s*$',
     ]
     
     @classmethod
     def clean(cls, response: str) -> str:
-        """Clean response by removing all thinking artifacts."""
         if not response:
             return response
         
         cleaned = response
         
-        # Remove thinking blocks
         for pattern, flags in cls.THINKING_PATTERNS:
             cleaned = re.sub(pattern, '', cleaned, flags=flags)
         
-        # Remove stray tags
         for pattern in cls.TAG_PATTERNS:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
         
-        # Remove junk patterns at end
         for pattern in cls.JUNK_PATTERNS:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
         
-        # Normalize whitespace
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
         cleaned = re.sub(r' +', ' ', cleaned)
         
@@ -155,10 +145,8 @@ class ResponseCleaner:
     
     @classmethod
     def extract_thinking(cls, response: str) -> tuple:
-        """Extract thinking and clean response separately."""
         thinking = ""
         
-        # Look for Qwen3's native <think> block
         match = re.search(r'<think>(.*?)</think>', response, re.DOTALL | re.IGNORECASE)
         if match:
             thinking = match.group(1).strip()
@@ -168,7 +156,6 @@ class ResponseCleaner:
 
 
 def clean_response(response: str) -> str:
-    """Convenience function for response cleaning."""
     return ResponseCleaner.clean(response)
 
 
@@ -184,14 +171,126 @@ class AgentResponse:
     intent: str = ""
     rag_used: bool = False
     sources: List[str] = field(default_factory=list)
+    tool_used: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
 # ============================================================================
+# File Server Detection (NEW)
+# ============================================================================
+
+def is_file_server_query(query: str) -> bool:
+    """Check if query references file server folders."""
+    query_lower = query.lower()
+    patterns = [
+        r'(?:από|μέσα σ?τ[οα]ν?|στ[οα]ν?)\s+φάκελο',
+        r'φάκελο[ςσ]?\s+\S+',
+        r'(?:εντόπισε|βρες|έλεγξε|ανάλυσε).*(?:φάκελο|αρχεία)',
+        r'(?:ανωμαλ[ιί][εέ]ς?|αποκλ[ιί]σ[εέ]ις?).*(?:φάκελο|αρχεί)',
+    ]
+    return any(re.search(p, query_lower) for p in patterns)
+
+
+def extract_folder_from_query(query: str) -> Optional[str]:
+    """Extract folder name from query."""
+    patterns = [
+        r'(?:από|μέσα σ?τ[οα]ν?|στ[οα]ν?)\s+φάκελο\s+([^,\.!;]+)',
+        r'φάκελο[ςσ]?\s+([^,\.!;]+?)(?:\s*,|\s+(?:εντόπισε|βρες|έλεγξε))',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, query.lower())
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def extract_action_from_query(query: str) -> str:
+    """Extract action type from query."""
+    query_lower = query.lower()
+    if re.search(r'(?:δείξ|εμφάνισ|list|show)', query_lower):
+        return 'browse'
+    if re.search(r'(?:ψάξε|αναζήτησε|search)', query_lower):
+        return 'search'
+    return 'analyze'
+
+
+# ============================================================================
 # Pipeline Steps
 # ============================================================================
+
+class FileServerStep(PipelineStep):
+    """Check for file server queries and execute tool if needed."""
+    
+    def __init__(self, tools: Dict[str, Tool]):
+        self.tools = tools
+    
+    @property
+    def name(self) -> str:
+        return "File Server Check"
+    
+    def process(self, context: Context) -> Context:
+        query = context.query
+        
+        # Check if this is a file server query
+        if not is_file_server_query(query):
+            return context
+        
+        # Check if file_server tool is available
+        file_server_tool = self.tools.get('file_server')
+        if not file_server_tool:
+            logger.warning("File server query detected but tool not available")
+            return context
+        
+        # Extract folder and action
+        folder = extract_folder_from_query(query)
+        action = extract_action_from_query(query)
+        
+        logger.info(f"📁 File server query detected: folder='{folder}', action='{action}'")
+        
+        if not folder:
+            logger.warning("Could not extract folder name from query")
+            return context
+        
+        # Execute file server tool
+        try:
+            result = file_server_tool.execute(
+                folder=folder,
+                action=action,
+                query=query
+            )
+            
+            if result.get('success'):
+                context.metadata['file_server_result'] = result
+                context.metadata['tool_used'] = 'file_server'
+                
+                # Get file paths for analysis
+                file_paths = result.get('data', {}).get('file_paths', [])
+                
+                if file_paths and action == 'analyze':
+                    # Chain to logistics analyzer
+                    context.metadata['files_for_analysis'] = file_paths
+                    logger.info(f"📁 Got {len(file_paths)} files for analysis")
+                    
+                    # Try to run logistics analysis
+                    logistics_tool = self.tools.get('detect_logistics_anomalies')
+                    if logistics_tool:
+                        logger.info("🔍 Running logistics anomaly detection...")
+                        analysis_result = logistics_tool.execute(file_paths=file_paths)
+                        if analysis_result.get('success'):
+                            context.metadata['analysis_result'] = analysis_result
+                            context.metadata['tool_used'] = 'file_server + logistics'
+                            logger.info("✅ Logistics analysis complete")
+            else:
+                logger.warning(f"File server tool failed: {result.get('error')}")
+                
+        except Exception as e:
+            logger.error(f"File server execution failed: {e}")
+        
+        return context
+
 
 class RAGRetrievalStep(PipelineStep):
     """Retrieves relevant documents from knowledge base."""
@@ -204,6 +303,11 @@ class RAGRetrievalStep(PipelineStep):
         return "RAG Retrieval"
     
     def process(self, context: Context) -> Context:
+        # Skip RAG if file server already handled this
+        if context.metadata.get('tool_used'):
+            logger.info("Skipping RAG - tool already handled query")
+            return context
+        
         if not self.retriever:
             return context
         
@@ -227,16 +331,14 @@ class RAGRetrievalStep(PipelineStep):
 class PromptBuildStep(PipelineStep):
     """Builds the final prompt for LLM - MEMORY OPTIMIZED for 6GB VRAM."""
     
-    # Memory limits
-    MAX_RAG_CONTENT_PER_DOC = 300  # Was 500
-    MAX_RAG_DOCS = 2               # Was 3
-    MAX_HISTORY_MESSAGES = 3       # Was 5
-    MAX_MESSAGE_LENGTH = 150       # Was 200
-    MAX_SYSTEM_PROMPT = 800        # Truncate system prompt
+    MAX_RAG_CONTENT_PER_DOC = 300
+    MAX_RAG_DOCS = 2
+    MAX_HISTORY_MESSAGES = 3
+    MAX_MESSAGE_LENGTH = 150
+    MAX_SYSTEM_PROMPT = 800
     
     def __init__(self, system_prompt: str = None):
         base_prompt = system_prompt or GREEK_SYSTEM_PROMPT
-        # Truncate system prompt if too long
         if len(base_prompt) > self.MAX_SYSTEM_PROMPT:
             self.system_prompt = base_prompt[:self.MAX_SYSTEM_PROMPT] + "..."
         else:
@@ -247,27 +349,49 @@ class PromptBuildStep(PipelineStep):
         return "Prompt Building"
     
     def process(self, context: Context) -> Context:
-        # Build knowledge base section if RAG results exist (LIMITED)
+        # Check if we have analysis results from tools
+        analysis_result = context.metadata.get('analysis_result')
+        if analysis_result and analysis_result.get('success'):
+            # Build prompt with analysis results
+            data = analysis_result.get('data', {})
+            anomalies = data.get('anomalies', [])
+            summary = data.get('summary', {})
+            
+            analysis_text = self._format_analysis(anomalies, summary)
+            
+            prompt = f"""<|im_start|>system
+{self.system_prompt}
+<|im_end|>
+<|im_start|>user
+{context.query}
+
+ΑΠΟΤΕΛΕΣΜΑΤΑ ΑΝΑΛΥΣΗΣ:
+{analysis_text}
+
+Παρουσίασε τα ευρήματα στον χρήστη στα Ελληνικά.
+<|im_end|>
+<|im_start|>assistant
+"""
+            context.metadata["prompt"] = prompt
+            return context
+        
+        # Standard RAG-based prompt
         kb_section = ""
         rag_context = context.metadata.get("rag_context", [])
         
         if rag_context:
             kb_parts = []
-            # Only use first N documents
             for i, result in enumerate(rag_context[:self.MAX_RAG_DOCS], 1):
                 content = result.get("content", result.get("page_content", ""))
                 source = result.get("metadata", {}).get("source", "unknown")
-                # Truncate content
                 truncated = content[:self.MAX_RAG_CONTENT_PER_DOC]
                 kb_parts.append(f"[{i}] {source}:\n{truncated}")
             
             kb_section = f"\n<kb>\n{''.join(kb_parts)}\n</kb>\n"
         
-        # Build conversation history (LIMITED)
         history_section = ""
         if context.chat_history:
             history_parts = []
-            # Only last N messages
             for msg in context.chat_history[-self.MAX_HISTORY_MESSAGES:]:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")[:self.MAX_MESSAGE_LENGTH]
@@ -276,7 +400,6 @@ class PromptBuildStep(PipelineStep):
             if history_parts:
                 history_section = f"\n<history>\n{chr(10).join(history_parts)}\n</history>\n"
         
-        # Construct final prompt (COMPACT)
         prompt = f"""<|im_start|>system
 {self.system_prompt}
 {kb_section}{history_section}<|im_end|>
@@ -288,6 +411,24 @@ class PromptBuildStep(PipelineStep):
         
         context.metadata["prompt"] = prompt
         return context
+    
+    def _format_analysis(self, anomalies: List[Dict], summary: Dict) -> str:
+        """Format analysis results for prompt."""
+        lines = []
+        
+        if summary:
+            lines.append(f"Σύνοψη: {summary.get('total_anomalies', 0)} ανωμαλίες")
+            lines.append(f"Κρίσιμες: {summary.get('critical', 0)}, Υψηλές: {summary.get('high', 0)}")
+        
+        if anomalies:
+            lines.append("\nΑνωμαλίες:")
+            for a in anomalies[:5]:  # Limit to 5
+                severity = a.get('severity', 'MEDIUM')
+                desc = a.get('description', '')[:100]
+                lines.append(f"- [{severity}] {desc}")
+        
+        return "\n".join(lines)
+
 
 class LLMGenerationStep(PipelineStep):
     """Generates response using LLM with thinking extraction."""
@@ -304,23 +445,19 @@ class LLMGenerationStep(PipelineStep):
         prompt = context.metadata.get("prompt", context.query)
         
         try:
-            # Get max_new_tokens from config
             from app.config import LLM
             max_tokens = LLM.max_new_tokens
             
             logger.info(f"Generating with max_new_tokens={max_tokens}")
             
-            # Generate response - pass max_tokens correctly
             raw_response = self.llm.generate(
                 prompt,
                 max_tokens=max_tokens,
                 max_new_tokens=max_tokens
             )
             
-            # Extract thinking (from Qwen3's <think> block) and clean response
             thinking, clean_answer = ResponseCleaner.extract_thinking(raw_response)
             
-            # Store results
             context.metadata["raw_response"] = raw_response
             context.metadata["llm_response"] = clean_answer
             
@@ -339,7 +476,6 @@ class LLMGenerationStep(PipelineStep):
         return context
 
 
-# Backwards compatibility
 ThinkingAwareLLMGenerationStep = LLMGenerationStep
 
 
@@ -362,29 +498,38 @@ class SimpleAgentOrchestrator:
         self.intent_classifier = intent_classifier
         self.decision_maker = decision_maker
         self.llm = llm_provider
-        self.llm_provider = llm_provider  # Alias for compatibility
+        self.llm_provider = llm_provider
         self.retriever = retriever
-        self.prompt_builder = prompt_builder  # Kept for interface, but we use Greek prompt
+        self.prompt_builder = prompt_builder
         self.enable_thinking = enable_thinking
         self.tools: Dict[str, Tool] = {}
         
-        # Build pipeline steps
-        self.preprocessing_steps = [
-            RAGRetrievalStep(retriever),
-            PromptBuildStep(),
-        ]
-        
-        self.generation_step = LLMGenerationStep(llm_provider, enable_thinking)
+        # Pipeline steps will be built after tools are added
+        self._pipeline_built = False
         
         logger.info(f"✅ SimpleAgentOrchestrator initialized (thinking={enable_thinking})")
     
     def add_tool(self, tool: Tool) -> None:
         """Add a tool to the orchestrator."""
         self.tools[tool.name] = tool
+        self._pipeline_built = False  # Need to rebuild pipeline
         logger.info(f"Added tool: {tool.name}")
     
+    def _build_pipeline(self):
+        """Build pipeline steps with current tools."""
+        self.preprocessing_steps = [
+            FileServerStep(self.tools),  # NEW: Check file server FIRST
+            RAGRetrievalStep(self.retriever),
+            PromptBuildStep(),
+        ]
+        self.generation_step = LLMGenerationStep(self.llm, self.enable_thinking)
+        self._pipeline_built = True
+    
     def run_preprocessing(self, context: Context) -> Context:
-        """Run preprocessing steps (RAG, prompt building)."""
+        """Run preprocessing steps (File Server, RAG, prompt building)."""
+        if not self._pipeline_built:
+            self._build_pipeline()
+        
         for step in self.preprocessing_steps:
             try:
                 context = step.process(context)
@@ -396,6 +541,8 @@ class SimpleAgentOrchestrator:
     
     def run_generation(self, context: Context) -> Context:
         """Run LLM generation step."""
+        if not self._pipeline_built:
+            self._build_pipeline()
         return self.generation_step.process(context)
     
     def process(self, query: str, chat_history: List[Dict] = None) -> AgentResponse:
@@ -419,7 +566,8 @@ class SimpleAgentOrchestrator:
             thinking=context.metadata.get("_internal_thinking", ""),
             intent=str(context.metadata.get("intent", "")),
             rag_used=bool(context.metadata.get("rag_context")),
-            sources=context.metadata.get("sources", [])
+            sources=context.metadata.get("sources", []),
+            tool_used=context.metadata.get("tool_used", "")
         )
     
     def process_query(

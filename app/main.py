@@ -22,7 +22,7 @@ from app.api import config_router
 from app.api.auth_routes import router as auth_router, get_current_user_dep
 from app.api.chat_routes_authenticated import router as chat_router
 from app.api.file_routes import router as file_router  # NEW: File routes
-
+from app.api.logistics_routes import router as logistics_router
 # Import models
 from app.api import HealthResponse
 
@@ -238,7 +238,7 @@ app.include_router(chat_router)
 app.include_router(config_router)
 app.include_router(file_router)  # NEW: File routes
 app.include_router(intelligence_router)
-
+app.include_router(logistics_router)
 # =============================================================================
 # Streaming Endpoints
 # =============================================================================

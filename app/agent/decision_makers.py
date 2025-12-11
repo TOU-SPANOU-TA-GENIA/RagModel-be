@@ -98,6 +98,58 @@ class ParameterExtractors:
             return run_match.group(1)
         
         return None
+    
+    # =========================================================================
+    # FILE SERVER EXTRACTORS
+    # =========================================================================
+    
+    def extract_folder_reference(self, query: str) -> Optional[str]:
+        """Extract folder name/alias from Greek or English query."""
+        query_lower = query.lower()
+        
+        patterns = [
+            # Greek patterns
+            r'(?:από|μέσα σ?τ[οα]ν?|στ[οα]ν?)\s+φάκελο\s+[«"]?([^»".,]+)[»"]?',
+            r'φάκελος\s+[«"]?([^»".,]+)[»"]?',
+            r'(?:στ[οηα]ν?|απ[όο]\s+τ[οηα]ν?)\s+[«"]?([^»".,\s]{2,}(?:\s+(?:και|&)\s+[^»".,\s]+)?)[»"]?',
+            # English patterns
+            r'(?:from|in)\s+(?:the\s+)?(?:folder|directory)\s+["\']?([^"\'.,]+)["\']?',
+            r'folder\s+["\']?([^"\'.,]+)["\']?',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                return match.group(1).strip()
+        
+        return None
+    
+    def extract_file_server_action(self, query: str) -> str:
+        """Detect file server action type."""
+        query_lower = query.lower()
+        
+        action_patterns = {
+            'analyze': [
+                r'αναλ[υύ]', r'εντόπισ[εέ]', r'έλεγ[χξ]', r'εξέτασ',
+                r'ανωμαλ[ίι]', r'αποκλ[ιί]σ', r'analyze', r'anomal', r'check'
+            ],
+            'compare': [
+                r'σ[υύ]γκρι', r'compare', r'διαφορ', r'αντιπαραβολ'
+            ],
+            'browse': [
+                r'δε[ίι]ξ', r'εμφάνισ', r'list', r'show', r'τι υπάρχει', r'ποια αρχεία'
+            ],
+            'search': [
+                r'ψά[χξ]', r'βρ[εέ]ς?', r'αναζήτησ'
+            ],
+        }
+        
+        for action, patterns in action_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, query_lower):
+                    return action
+        
+        return 'analyze'  # default
 
 
 class SimpleDecisionMaker(DecisionMaker):
@@ -142,40 +194,77 @@ class SimpleDecisionMaker(DecisionMaker):
         return decision
     
     def _identify_tool(self, query: str) -> Optional[Dict[str, Any]]:
-        """
-        Identify which tool to use based on query patterns.
-        Order matters: more specific patterns should come first.
-        """
         query_lower = query.lower()
         
         # =========================================================================
-        # 1. LIST/SHOW FILES PATTERNS (check first - most likely to be misclassified)
+        # FILE SERVER - ΠΡΕΠΕΙ ΝΑ ΕΙΝΑΙ ΠΡΩΤΟ!
+        # =========================================================================
+        file_server_patterns = [
+            r'(?:από|μέσα σ?τ[οα]ν?|στ[οα]ν?)\s+φάκελο',
+            r'φάκελος\s+',
+            r'αρχεία\s+(?:του?|της?|στ)',
+        ]
+        
+        for pattern in file_server_patterns:
+            if re.search(pattern, query_lower):
+                # Extract folder name
+                folder_match = re.search(
+                    r'(?:από|μέσα σ?τ[οα]ν?|στ[οα]ν?)\s+φάκελο\s+[«"]?([^»".,]+)[»"]?',
+                    query_lower
+                )
+                folder = folder_match.group(1).strip() if folder_match else ""
+                
+                # Detect action
+                action = 'analyze'
+                if re.search(r'(?:δείξ|εμφάνισ|list|show)', query_lower):
+                    action = 'browse'
+                
+                return {
+                    'name': 'file_server',
+                    'params': {
+                        'folder': folder,
+                        'action': action,
+                        'query': query
+                    }
+                }
+        
+        # =========================================================================
+        # 0.5 LOGISTICS ANALYSIS PATTERNS (Greek)
+        # =========================================================================
+        logistics_patterns = [
+            r'(?:εντόπισ[εέ]|ανάλυσ[εέ]|έλεγξ[εέ]).*(?:ανωμαλ[ίι]|αποκλ[ιί]σ)',
+            r'(?:ανωμαλ[ίι]|αποκλ[ιί]σ).*(?:εφοδιαστικ|απογραφ|συντήρηση)',
+            r'έλεγχος\s+εφοδιαστικ',
+            r'logistics\s+(?:audit|analysis|anomal)',
+        ]
+        
+        for pattern in logistics_patterns:
+            if re.search(pattern, query_lower):
+                return {
+                    'name': 'logistics_analysis',
+                    'params': {'query': query}
+                }
+        
+        # =========================================================================
+        # 1. LIST/SHOW FILES PATTERNS
         # =========================================================================
         list_patterns = [
-            # Explicit list requests
             r'list\s+(?:all\s+)?(?:the\s+)?files',
             r'show\s+(?:me\s+)?(?:all\s+)?(?:the\s+)?files',
             r'what\s+files\s+(?:do\s+you\s+)?(?:have|see|can)',
             r'which\s+files\s+(?:do\s+you\s+)?(?:have|see|can)',
             r'display\s+(?:all\s+)?(?:the\s+)?files',
-            
-            # Access/availability questions
             r'(?:files|documents)\s+(?:do\s+)?you\s+(?:have|see)\s+access',
             r'(?:what|which)\s+(?:files|documents)\s+(?:are\s+)?available',
             r'files\s+you\s+(?:can\s+)?(?:see|access|read)',
-            
-            # Directory listing
             r'(?:show|list|display)\s+(?:the\s+)?directory',
             r'(?:what\'?s?|show)\s+in\s+(?:the\s+)?(?:folder|directory)',
-            
-            # Generic "all files" patterns
             r'all\s+(?:the\s+)?(?:txt|pdf|doc|files)',
             r'(?:every|all)\s+file',
         ]
         
         for pattern in list_patterns:
             if re.search(pattern, query_lower):
-                # Extract optional directory or pattern
                 directory = self._extractors.extract_directory(query) or "."
                 file_pattern = self._extractors.extract_extension_pattern(query) or "*"
                 
@@ -206,7 +295,7 @@ class SimpleDecisionMaker(DecisionMaker):
                     }
         
         # =========================================================================
-        # 3. READ FILE PATTERNS (must have specific file reference)
+        # 3. READ FILE PATTERNS
         # =========================================================================
         read_patterns = [
             r'read\s+(?:the\s+)?(?:file\s+)?["\']?(\S+\.\w+)["\']?',
@@ -251,6 +340,8 @@ class SimpleDecisionMaker(DecisionMaker):
             r'(?:generate|create|make)\s+(?:a\s+)?document',
             r'(?:generate|create|make)\s+(?:a\s+)?presentation',
             r'(?:generate|create|make)\s+(?:a\s+)?report',
+            # Greek
+            r'(?:δημιούργησε|φτιάξε)\s+(?:μια?\s+)?(?:αναφορά|έκθεση|παρουσίαση)',
         ]
         
         for pattern in doc_patterns:
@@ -279,6 +370,29 @@ class SimpleDecisionMaker(DecisionMaker):
                     }
         
         return None
+    
+    def _is_file_server_query(self, query: str) -> bool:
+        """Check if query references file server folders."""
+        patterns = [
+            # Greek folder references
+            r'(?:από|μέσα σ?τ[οα]ν?|στ[οα]ν?)\s+φάκελο',
+            r'φάκελος\s+',
+            r'(?:στ[οηα]ν?|απ[όο])\s+(?:server|διακομιστή)',
+            r'αρχεία\s+(?:του?|της?|στ)',
+            # English
+            r'(?:from|in)\s+(?:the\s+)?(?:server|shared)\s+folder',
+            r'file\s*server',
+            r'network\s+(?:drive|folder|share)',
+            # Generic
+            r'κοινόχρηστ[αο]',
+            r'δίκτυο',
+        ]
+        
+        for pattern in patterns:
+            if re.search(pattern, query):
+                return True
+        
+        return False
 
 
 class LLMDecisionMaker(DecisionMaker):

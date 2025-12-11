@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 
 from app.core.interfaces import Context, event_bus
+from app.agent.logistics_patterns import extend_decision_maker_with_logistics
 from app.agent.orchestrator import SimpleAgentOrchestrator, AgentResponse
 from app.agent.classifiers import (
     RuleBasedIntentClassifier,
@@ -269,6 +270,9 @@ class AgentBuilder:
         if self.config.debug_mode:
             self._setup_debug_events()
         
+        if self.decision_maker:
+            extend_decision_maker_with_logistics(self.decision_maker)
+    
         logger.info(f"Agent orchestrator built successfully (thinking={self.enable_thinking})")
         return orchestrator
     

@@ -22,44 +22,68 @@ class RuleBasedIntentClassifier(IntentClassifier):
         self.patterns = {
             Intent.ACTION: {
                 'keywords': [
+                    # English
                     'read', 'open', 'show', 'display', 'view', 'check', 'see',
                     'get', 'fetch', 'look at', 'look in', "what's in",
                     'execute', 'run', 'create', 'write', 'update', 'delete',
                     'cat', 'show me', 'display the', 'read the',
                     'build', 'generate', 'make', 'produce',
-                    'document', 'powerpoint', 'word', 'pdf', 'presentation'
+                    'document', 'powerpoint', 'word', 'pdf', 'presentation',
+                    # Greek - file server
+                    'φάκελο', 'φακελο', 'φάκελος', 'φακελος',
+                    'εντόπισε', 'εντοπισε', 'βρες', 'βρές',
+                    'έλεγξε', 'ελεγξε', 'ανάλυσε', 'αναλυσε',
+                    'ανωμαλίες', 'ανωμαλιες', 'αποκλίσεις', 'αποκλισεις',
+                    # Greek - documents
+                    'δημιούργησε', 'δημιουργησε', 'φτιάξε', 'φτιαξε',
+                    'αναφορά', 'αναφορα', 'έκθεση', 'εκθεση',
                 ],
                 'patterns': [
+                    # English patterns
                     r'(read|show|open|view)\s+(the\s+)?file',
                     r'file\s+at\s+[/\w]+',
                     r'(content|contents)\s+of',
-                    r'(build|create|generate|make)\s+(a|an)?\s+(word|powerpoint|pdf|document|presentation)',
+                    r'(build|create|generate|make)\s+(a|an)?\s*(word|powerpoint|pdf|document|presentation)',
                     r'(build|create|generate)\s+.*\s+(document|powerpoint|presentation|word|pdf)',
+                    # Greek - FILE SERVER (high priority)
+                    r'(?:από|μέσα σ?τ[οα]ν?|στ[οα]ν?)\s+φάκελο',
+                    r'φάκελο[ςσ]?\s+',
+                    r'(?:εντόπισε|εντοπισε|βρες|έλεγξε|ελεγξε|ανάλυσε|αναλυσε)',
+                    r'(?:ανωμαλ[ιί][εέ]ς?|αποκλ[ιί]σ[εέ]ις?)',
+                    # Greek - documents
+                    r'(?:δημιούργησε|φτιάξε)\s+.*(?:αναφορά|έκθεση|παρουσίαση)',
                 ],
                 'weight': 1.5
             },
             Intent.QUESTION: {
                 'keywords': [
+                    # English
                     'what', 'how', 'why', 'when', 'where', 'who', 'which',
                     'explain', 'describe', 'tell me', 'can you',
-                    'do you know', 'what does', 'information about'
+                    'do you know', 'what does', 'information about',
+                    # Greek
+                    'τι', 'πώς', 'πως', 'γιατί', 'γιατι', 'πότε', 'ποτε',
+                    'πού', 'που', 'ποιος', 'ποια', 'ποιο',
                 ],
                 'patterns': [
                     r'^(what|how|why|when|where|who)',
                     r'\?$',
                     r'tell\s+me\s+about',
-                    r'explain\s+\w+'
+                    r'explain\s+\w+',
+                    r'^(τι|πώς|γιατί|πότε|πού|ποιος)\s+',
                 ],
                 'weight': 1.0
             },
             Intent.CONVERSATION: {
                 'keywords': [
                     'hello', 'hi', 'hey', 'thanks', 'thank you',
-                    'goodbye', 'bye', 'ok', 'okay', 'good'
+                    'goodbye', 'bye', 'ok', 'okay', 'good',
+                    'γεια', 'καλημέρα', 'καλησπέρα', 'ευχαριστώ',
                 ],
                 'patterns': [
                     r'^(hello|hi|hey|thanks|bye)$',
-                    r'^(good|ok|okay|alright)$'
+                    r'^(good|ok|okay|alright)$',
+                    r'^(γεια|καλημέρα|καλησπέρα)$',
                 ],
                 'weight': 0.5
             }
@@ -69,6 +93,11 @@ class RuleBasedIntentClassifier(IntentClassifier):
         """Classify intent based on rules."""
         query = context.query.lower().strip()
         scores = {intent: 0.0 for intent in Intent}
+        
+        # FAST PATH: Check for file server patterns first
+        if self._is_file_server_query(query):
+            logger.info(f"File server query detected: '{query[:50]}...'")
+            return Intent.ACTION
         
         for intent, config in self.patterns.items():
             score = self._calculate_score(query, config, context)
@@ -83,6 +112,15 @@ class RuleBasedIntentClassifier(IntentClassifier):
         logger.info(f"Classified '{query[:50]}...' as {best_intent.value} (score: {best_score})")
         
         return best_intent
+    
+    def _is_file_server_query(self, query: str) -> bool:
+        """Fast check for file server queries."""
+        patterns = [
+            r'(?:από|μέσα σ?τ[οα]ν?|στ[οα]ν?)\s+φάκελο',
+            r'φάκελο[ςσ]?\s+\S+.*(?:εντόπισε|βρες|έλεγξε|ανάλυσε|ανωμαλ)',
+            r'(?:εντόπισε|βρες|έλεγξε).*φάκελο',
+        ]
+        return any(re.search(p, query) for p in patterns)
     
     def _calculate_score(self, query: str, config: dict, context: Context) -> float:
         """Calculate score for an intent."""
