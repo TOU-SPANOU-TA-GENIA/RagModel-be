@@ -23,6 +23,8 @@ from app.api.auth_routes import router as auth_router, get_current_user_dep
 from app.api.chat_routes_authenticated import router as chat_router
 from app.api.file_routes import router as file_router  # NEW: File routes
 from app.api.logistics_routes import router as logistics_router
+from app.api.workflow_routes import router as workflow_router
+from app.workflows import initialize_workflow_system, shutdown_workflow_system
 # Import models
 from app.api import HealthResponse
 
@@ -167,7 +169,7 @@ async def lifespan(app: FastAPI):
         # Initialize system (Agent, Models, etc.)
         logger.info("Initializing system components...")
         await startup_manager.initialize_system()
-        
+        await initialize_workflow_system()
         logger.info("✅ Application ready")
         logger.info(f"   Language: Greek (Ελληνικά)")
         logger.info(f"   Streaming: Enabled")
@@ -189,6 +191,7 @@ async def lifespan(app: FastAPI):
         logger.info("Stopping network monitoring...")
         try:
             from app.core.network_rag_integration import get_network_integrator
+            await shutdown_workflow_system()
             integrator = get_network_integrator()
             if integrator:
                 integrator.stop()
@@ -239,6 +242,7 @@ app.include_router(config_router)
 app.include_router(file_router)  # NEW: File routes
 app.include_router(intelligence_router)
 app.include_router(logistics_router)
+app.include_router(workflow_router)
 # =============================================================================
 # Streaming Endpoints
 # =============================================================================
