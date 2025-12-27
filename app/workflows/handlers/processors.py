@@ -203,7 +203,10 @@ async def handle_llm_analysis(
     language = config.get('language', 'greek')
     
     # Build system prompt with language enforcement
-    default_system = 'Είσαι βοηθός ανάλυσης. ΑΠΑΝΤΗΣΕ ΜΟΝΟ ΣΤΑ ΕΛΛΗΝΙΚΑ. Μην γράφεις σκέψεις ή εξηγήσεις στα Αγγλικά.'
+    # default_system = 'Είσαι βοηθός ανάλυσης. ΑΠΑΝΤΗΣΕ ΜΟΝΟ ΣΤΑ ΕΛΛΗΝΙΚΑ. Μην γράφεις σκέψεις ή εξηγήσεις στα Αγγλικά.'
+    from datetime import datetime
+    current_date = datetime.now().strftime("%d/%m/%Y")
+    default_system = f'Σημερινή ημερομηνία: {current_date}. Είσαι βοηθός ανάλυσης. ΑΠΑΝΤΗΣΕ ΜΟΝΟ ΣΤΑ ΕΛΛΗΝΙΚΑ.'
     if language != 'greek':
         default_system = 'You are an analysis assistant. Respond concisely without showing your thinking process.'
     system_prompt = config.get('system_prompt', default_system)

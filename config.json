@@ -1,7 +1,7 @@
 {
   "llm": {
     "model_name": "./offline_models/qwen3-4b",
-    "max_new_tokens": 256,
+    "max_new_tokens": 2000,
     "trust_remote_code": true,
     "temperature": 0.7,
     "top_p": 0.9,
@@ -22,7 +22,7 @@
     "max_cache_size": 10000
   },
   "rag": {
-    "top_k": 1,
+    "top_k": 3,
     "min_relevance_score": 0.5,
     "chunk_size": 500,
     "chunk_overlap": 50,

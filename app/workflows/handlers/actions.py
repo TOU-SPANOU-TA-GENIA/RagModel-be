@@ -33,6 +33,7 @@ def _clean_llm_output(text: str) -> str:
     
     # Detect prompt echoing - if output starts with instruction-like text
     prompt_echo_patterns = [
+        r"(?:^|\n)(?:Παρακαλώ,?\s*απαντ[ήέ]στε|Please,?\s*respond)[^.]*[.\n]",
         r'^Για την απάντηση.*?(?=\{|\Z)',
         r'^Στο JSON.*?(?=\{|\Z)',
         r'^Πρέπει να.*?(?=\{|\Z)',
@@ -99,6 +100,9 @@ def _clean_llm_output(text: str) -> str:
     
     # Fallback: Remove obvious noise patterns
     patterns_to_remove = [
+        r"<think>.*?</think>",
+        r"(?:^|\n)\*?\*?(?:Παρακαλώ|Please),?\s*(?:απαντ[ήέ]στε|respond)[^.\n]*[.\n]?",
+        r"\*\*Απάντηση:\*\*\s*",
         r"(?:^|\n)(?:Okay|Ok|Let me|First|Starting).*?(?=\n\n|\Z)",
         r"(?:^|\n)(?:Για|Στο|Πρέπει|Η απάντηση).*?(?=\n\n|\Z)",
         r"```[a-z]*\n?|```",
@@ -197,7 +201,7 @@ async def handle_generate_report(
             report_sections['anomalies'] = anomalies
     
     if 'recommendations' in include_sections:
-        recommendations = _generate_recommendations(findings or anomalies, language, critical_found)
+        recommendations = _generate_recommendations(findings or anomalies, language, critical_found, anomalies_found)
         # Add critical alert if detected
         if critical_found and critical_keywords:
             if language == 'greek':
@@ -269,13 +273,13 @@ async def handle_generate_report(
         )
 
 
-def _generate_recommendations(anomalies: List[Dict], language: str, critical_found: bool = False) -> List[str]:
+def _generate_recommendations(anomalies: List[Dict], language: str, critical_found: bool = False, anomalies_found: bool = False) -> List[str]:
     """Generate recommendations based on detected anomalies/findings."""
     recommendations = []
     
     if not anomalies:
         # Only say "no anomalies" if critical_found is also false
-        if not critical_found:
+        if not critical_found and not anomalies_found:
             if language == 'greek':
                 recommendations.append("✅ Δεν εντοπίστηκαν ανωμαλίες. Συνεχίστε την κανονική παρακολούθηση.")
             else:
