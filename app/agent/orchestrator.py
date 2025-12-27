@@ -95,6 +95,7 @@ class ResponseCleaner:
     
     THINKING_PATTERNS = [
         (r'<think>.*?</think>', re.DOTALL | re.IGNORECASE),
+        (r'<think>.*$', re.DOTALL | re.IGNORECASE), # Handle unclosed tags
         (r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE),
         (r'<σκέψη>.*?</σκέψη>', re.DOTALL | re.IGNORECASE),
     ]
@@ -108,18 +109,11 @@ class ResponseCleaner:
         r'</s>',
         r'</?knowledge_base>',
         r'</?context>',
+        r'</?kb>',
         r'</?current_query>',
         r'</?conversation_history>',
         r'</?response_instruction>',
         r'/think',
-        r'/no_think',
-        r'/(zh|en|el)',
-    ]
-    
-    JUNK_PATTERNS = [
-        r'(\s*</s>)+\s*$',
-        r'(\s*<pad>)+\s*$',
-        r'(\s*\[PAD\])+\s*$',
     ]
     
     @classmethod
@@ -128,32 +122,27 @@ class ResponseCleaner:
             return response
         
         cleaned = response
-        
+        # 1. Remove blocks with content
         for pattern, flags in cls.THINKING_PATTERNS:
             cleaned = re.sub(pattern, '', cleaned, flags=flags)
         
+        # 2. Strip remaining lone tags
         for pattern in cls.TAG_PATTERNS:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
         
-        for pattern in cls.JUNK_PATTERNS:
-            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
-        
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-        cleaned = re.sub(r' +', ' ', cleaned)
-        
         return cleaned.strip()
     
     @classmethod
     def extract_thinking(cls, response: str) -> tuple:
         thinking = ""
-        
-        match = re.search(r'<think>(.*?)</think>', response, re.DOTALL | re.IGNORECASE)
+        # Match from opening tag to closing tag, OR to end of string if unclosed
+        match = re.search(r'<think>(.*?)(?:</think>|$)', response, re.DOTALL | re.IGNORECASE)
         if match:
             thinking = match.group(1).strip()
         
         clean_response = cls.clean(response)
         return thinking, clean_response
-
 
 def clean_response(response: str) -> str:
     return ResponseCleaner.clean(response)
@@ -331,112 +320,81 @@ class RAGRetrievalStep(PipelineStep):
         
         return context
 
-
 class PromptBuildStep(PipelineStep):
-    """Builds the final prompt for LLM - MEMORY OPTIMIZED for 6GB VRAM."""
+    """
+    Generalized Logic Engine.
+    Enforces a strict Variable-to-Constraint validation hierarchy.
+    """
     
-    MAX_RAG_CONTENT_PER_DOC = 300
-    MAX_RAG_DOCS = 2
+    MAX_RAG_CONTENT_PER_DOC = 1200 
+    MAX_RAG_DOCS = 5              
     MAX_HISTORY_MESSAGES = 3
     MAX_MESSAGE_LENGTH = 150
-    MAX_SYSTEM_PROMPT = 800
+    MAX_SYSTEM_PROMPT = 1000
     
     def __init__(self, system_prompt: str = None):
         base_prompt = system_prompt or GREEK_SYSTEM_PROMPT
-        if len(base_prompt) > self.MAX_SYSTEM_PROMPT:
-            self.system_prompt = base_prompt[:self.MAX_SYSTEM_PROMPT] + "..."
-        else:
-            self.system_prompt = base_prompt
+        self.system_prompt = base_prompt[:self.MAX_SYSTEM_PROMPT]
     
     @property
     def name(self) -> str:
         return "Prompt Building"
     
     def process(self, context: Context) -> Context:
-        # Check if we have analysis results from tools
         analysis_result = context.metadata.get('analysis_result')
         if analysis_result and analysis_result.get('success'):
-            # Build prompt with analysis results
             data = analysis_result.get('data', {})
-            anomalies = data.get('anomalies', [])
-            summary = data.get('summary', {})
-            
-            analysis_text = self._format_analysis(anomalies, summary)
-            
-            prompt = f"""<|im_start|>system
-{self.system_prompt}
-<|im_end|>
-<|im_start|>user
-{context.query}
-
-ΑΠΟΤΕΛΕΣΜΑΤΑ ΑΝΑΛΥΣΗΣ:
-{analysis_text}
-
-Παρουσίασε τα ευρήματα στον χρήστη στα Ελληνικά.
-<|im_end|>
-<|im_start|>assistant
-"""
+            analysis_text = self._format_analysis(data.get('anomalies', []), data.get('summary', {}))
+            prompt = f"<|im_start|>system\n{self.system_prompt}\n<|im_end|>\n<|im_start|>user\n{context.query}\n\nDATA_ANALYSIS:\n{analysis_text}\n<|im_end|>\n<|im_start|>assistant\n"
             context.metadata["prompt"] = prompt
             return context
         
-        # Standard RAG-based prompt
         kb_section = ""
-        # if len(rag_context) > 1:
-        #     from app.agent.cross_reference_reasoning import get_reasoning_instructions
-        #     reasoning_section = get_reasoning_instructions()
         rag_context = context.metadata.get("rag_context", [])
-        
         if rag_context:
             kb_parts = []
             for i, result in enumerate(rag_context[:self.MAX_RAG_DOCS], 1):
                 content = result.get("content", result.get("page_content", ""))
-                source = result.get("metadata", {}).get("source", "unknown")
-                truncated = content[:self.MAX_RAG_CONTENT_PER_DOC]
-                kb_parts.append(f"[{i}] {source}:\n{truncated}")
-            
-            kb_section = f"\n<kb>\n{''.join(kb_parts)}\n</kb>\n"
+                source = result.get("metadata", {}).get("fileName", f"src_{i}")
+                kb_parts.append(f"REFERENCE_SOURCE_{i} (File: {source}):\n{content[:self.MAX_RAG_CONTENT_PER_DOC]}\n---")
+            kb_section = f"\n<knowledge_base>\n{''.join(kb_parts)}\n</knowledge_base>\n"
         
         history_section = ""
         if context.chat_history:
-            history_parts = []
-            for msg in context.chat_history[-self.MAX_HISTORY_MESSAGES:]:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")[:self.MAX_MESSAGE_LENGTH]
-                history_parts.append(f"{role}: {content}")
-            
-            if history_parts:
-                history_section = f"\n<history>\n{chr(10).join(history_parts)}\n</history>\n"
+            history_parts = [f"{m.get('role')}: {m.get('content')[:self.MAX_MESSAGE_LENGTH]}" for m in context.chat_history[-self.MAX_HISTORY_MESSAGES:]]
+            history_section = f"\n<history>\n{chr(10).join(history_parts)}\n</history>\n"
         
+        # GENERALIZED LOGIC PROTOCOL - Scenario Agnostic
         prompt = f"""<|im_start|>system
 {self.system_prompt}
+
+# ΠΡΩΤΟΚΟΛΛΟ ΛΟΓΙΚΗΣ ΕΠΕΞΕΡΓΑΣΙΑΣ:
+1. **Fact Harvesting:** Εντόπισε όλες τις τιμές (ημερομηνίες, υπόλοιπα, status) που αφορούν την οντότητα του χρήστη στην <knowledge_base>.
+2. **Global Constraints:** Εντόπισε κανόνες που λειτουργούν ως "πύλες" (π.χ. ελάχιστος χρόνος, βασικό status) και πρέπει να πληρούνται ΠΡΙΝ εξεταστεί οποιαδήποτε επιμέρους κατηγορία.
+3. **Variable Validation:** Σύγκρινε τα δεδομένα του Βήματος 1 με τους κανόνες του Βήματος 2. Αν υπάρχει απόκλιση, η απάντηση είναι αρνητική και εξηγεί το κώλυμα.
+4. **Anti-Hallucination Policy:** Αν μια ποσοτική τιμή (π.χ. "5 ημέρες", "100 ευρώ") ταιριάζει με μια κατηγορία αλλά ο χρήστης δεν την έχει ορίσει ρητά, ΑΠΑΓΟΡΕΥΕΤΑΙ να την επιλέξεις. Ζήτησε διευκρίνιση για την αιτιολογία.
+
+# FORMAT:
+- Ξεκίνα με <think> για την ανάλυση και κλείσε με </think>.
+- Η τελική απάντηση στα Ελληνικά.
+
+CONTEXT:
 {kb_section}{history_section}<|im_end|>
 <|im_start|>user
 {context.query}
 <|im_end|>
 <|im_start|>assistant
 """
-        
         context.metadata["prompt"] = prompt
         return context
     
     def _format_analysis(self, anomalies: List[Dict], summary: Dict) -> str:
-        """Format analysis results for prompt."""
         lines = []
-        
-        if summary:
-            lines.append(f"Σύνοψη: {summary.get('total_anomalies', 0)} ανωμαλίες")
-            lines.append(f"Κρίσιμες: {summary.get('critical', 0)}, Υψηλές: {summary.get('high', 0)}")
-        
-        if anomalies:
-            lines.append("\nΑνωμαλίες:")
-            for a in anomalies[:5]:  # Limit to 5
-                severity = a.get('severity', 'MEDIUM')
-                desc = a.get('description', '')[:100]
-                lines.append(f"- [{severity}] {desc}")
-        
+        if summary: lines.append(f"Summary: {summary.get('total_anomalies', 0)} detected")
+        for a in anomalies[:5]:
+            lines.append(f"- [{a.get('severity', 'LOW')}] {a.get('description', '')[:100]}")
         return "\n".join(lines)
-
-
+ 
 class LLMGenerationStep(PipelineStep):
     """Generates response using LLM with thinking extraction."""
     
