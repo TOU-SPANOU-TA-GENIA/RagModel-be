@@ -169,17 +169,23 @@ class AgentBuilder:
             logger.info("Using mock retriever")
             self.retriever = create_mock_retriever()
         else:
-            logger.info("Creating in-memory retriever")
+            logger.info("Creating in-memory retriever with keyword boosting")
             from app.rag.retrievers import SimpleRetriever, LocalEmbeddingProvider
             from app.core.memory_store import FastInMemoryVectorStore, CachedEmbeddingProvider
+            from app.rag.enhanced_retriever import KeywordBoostedRetriever
             
-            # FIX: Use self.config.embedding_model_name which should match ingestion
             base_embedding_provider = LocalEmbeddingProvider(self.config.embedding_model_name)
-            
             embedding_provider = CachedEmbeddingProvider(base_embedding_provider)
             vector_store = FastInMemoryVectorStore()
             
-            self.retriever = SimpleRetriever(embedding_provider, vector_store)
+            # Base semantic retriever
+            semantic_retriever = SimpleRetriever(embedding_provider, vector_store)
+            
+            # Wrap with keyword boosting
+            self.retriever = KeywordBoostedRetriever(
+                semantic_retriever=semantic_retriever,
+                keyword_boost=0.3
+            )
             
         return self
     

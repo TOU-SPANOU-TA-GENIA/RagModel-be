@@ -316,6 +316,10 @@ class RAGRetrievalStep(PipelineStep):
             
             if results:
                 context.metadata["rag_context"] = results
+                for i, r in enumerate(results):
+                    source = r.get("metadata", {}).get("source", "unknown")
+                    content_preview = r.get("content", "")[:100]
+                    logger.info(f"RAG doc {i+1}: {source} - {content_preview}...")
                 context.metadata["sources"] = [
                     r.get("metadata", {}).get("source", "unknown")
                     for r in results
@@ -377,6 +381,9 @@ class PromptBuildStep(PipelineStep):
         
         # Standard RAG-based prompt
         kb_section = ""
+        # if len(rag_context) > 1:
+        #     from app.agent.cross_reference_reasoning import get_reasoning_instructions
+        #     reasoning_section = get_reasoning_instructions()
         rag_context = context.metadata.get("rag_context", [])
         
         if rag_context:
