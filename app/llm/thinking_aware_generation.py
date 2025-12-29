@@ -79,10 +79,13 @@ class ThinkingAwareLLMGenerationStep(PipelineStep):
         if hasattr(intent, "value"):
             intent = intent.value
         
-        has_rag = bool(context.metadata.get("rag_context"))
+        # Get the actual content to reason about
+        rag_context = context.metadata.get("rag_context", "")
+        has_rag = bool(rag_context)
         has_tool = bool(context.metadata.get("tool_result"))
         history_len = len(context.chat_history) if context.chat_history else 0
         
+        # Enhanced prompt with Context Injection and Verification Logic
         thinking_prompt = f"""<internal_analysis>
 User message: "{context.query}"
 
@@ -92,12 +95,20 @@ Context signals:
 - Has tool result: {has_tool}
 - Conversation history: {history_len} messages
 
-Briefly analyze:
-1. What does the user need?
-2. What response style fits?
-3. Key points to address?
+<context_data>
+{rag_context[:3000] if rag_context else "No context data available."}
+</context_data>
 
-Keep analysis to 2-3 sentences.
+Perform a strict logical check before planning the response:
+1. **Fact Extraction**: Identify specific data in the user request (dates, names, amounts).
+2. **Cross-Reference**: Verify these facts against the `<context_data>`. (e.g., Does the User meet the prerequisites? Are dates valid?)
+3. **Constraint Check**: Look for rules that might block the request (e.g., Service time < required time, missing documents).
+4. **Conclusion**:
+   - If constraints are violated -> Plan to explain the rejection reason.
+   - If information is missing -> Plan to ask for clarification.
+   - If valid -> Plan to approve/answer.
+
+Keep analysis concise.
 </internal_analysis>
 
 Analysis:"""

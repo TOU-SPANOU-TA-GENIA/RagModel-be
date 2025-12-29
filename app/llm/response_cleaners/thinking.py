@@ -47,14 +47,26 @@ class ThinkingCleaner(ResponseCleanerBase):
     def _add_fallback_patterns(self):
         """Add fallback patterns for common thinking formats."""
         fallback_patterns = [
-            # Explicit think tags (multiple languages)
+            # 1. Specific Time-based Thinking (e.g., "Σκέφτηκα για 32 δευτερόλεπτα")
+            # Matches the timing line + English text, stopping at a Greek letter or Bold marker.
+            # This handles the "Ρώτα..." case where there is no header, just Greek text.
+            (r'Σκέφτηκα για \d+ δευτερόλεπτα.*?(?=\n\s*(?:[Α-Ωα-ω]|\*\*))', re.DOTALL),
+            
+            # 2. Structural Anchor filtering (The General Approach)
+            # Removed '^' to catch thinking blocks even if they aren't at the absolute start
+            (r'.*?(?=\n\s*\*\*ΑΠΑΝΤΗΣΗ:\*\*)', re.DOTALL),
+            (r'.*?(?=\n\s*\*\*ANSWER:\*\*)', re.DOTALL),
+            (r'.*?(?=\n\s*\*\*Found Name:\*\*)', re.DOTALL),
+            (r'.*?(?=\n\s*\*\*Decision:\*\*)', re.DOTALL),
+
+            # 3. Tag-based filtering (Explicit boundaries)
             (r'<think>.*?</think>', re.DOTALL | re.IGNORECASE),
             (r'<thinking>.*?</thinking>', re.DOTALL | re.IGNORECASE),
             (r'<σκέψη>.*?</σκέψη>', re.DOTALL | re.IGNORECASE),
             (r'<internal_analysis>.*?</internal_analysis>', re.DOTALL | re.IGNORECASE),
             (r'<response_guidance>.*?</response_guidance>', re.DOTALL | re.IGNORECASE),
             
-            # Thinking: prefix style (to next paragraph or Response:)
+            # 4. Header-based filtering
             (r'^Thinking:.*?(?=\n\n[Α-Ωα-ωA-Z]|\n\nResponse:|\Z)', re.DOTALL | re.MULTILINE),
             (r'^Analysis:.*?(?=\n\n[Α-Ωα-ωA-Z]|\n\nResponse:|\Z)', re.DOTALL | re.MULTILINE),
             (r'^Σκέψη:.*?(?=\n\n|\Z)', re.DOTALL | re.MULTILINE),
@@ -80,7 +92,8 @@ class ThinkingCleaner(ResponseCleanerBase):
             if len(result) < before_len:
                 logger.debug(f"Removed thinking block using {source} pattern")
         
-        return result
+        # Clean up leading whitespace that might remain after removal
+        return result.lstrip()
     
     def is_enabled(self) -> bool:
         """Check if thinking cleaning is enabled."""
@@ -110,4 +123,4 @@ class ThinkingCleaner(ResponseCleanerBase):
                 result = pattern.sub('', result)
         
         thinking = "\n".join(str(t) for t in thinking_content) if thinking_content else None
-        return result, thinking
+        return result.lstrip(), thinking

@@ -2,17 +2,16 @@
 """
 Simplified Agent Orchestrator with Greek language and Qwen3 thinking mode support.
 FIXED: 
-- max_new_tokens properly passed
-- Qwen3 /think mode enabled
-- Thinking in English, response in Greek
-- FILE SERVER DETECTION before RAG
+- REVERSE LOOKUP BAN: Prevents guessing Category based on matching Quantities.
+- KEYWORD-FIRST LOGIC: Forces identification via text names, ignoring numbers initially.
+- GENERIC IMPLEMENTATION: No scenario-specific data involved.
 """
 
 import time
 import re
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, List, Optional
-
+from datetime import datetime
 from app.core.interfaces import (
     Context, Intent, Decision, 
     IntentClassifier, DecisionMaker, Tool,
@@ -25,64 +24,35 @@ logger = setup_logger(__name__)
 
 
 # ============================================================================
-# Greek System Prompt with English Thinking Mode
+# Greek System Prompt with English Thinking Mode (GENERIC STRICT MODE)
 # ============================================================================
 
-GREEK_SYSTEM_PROMPT = """Είσαι ένας εξυπηρετικός βοηθός AI που μιλάει Ελληνικά.
+GREEK_SYSTEM_PROMPT = """Είσαι ένας αυστηρός αλλά εξυπηρετικός Βοηθός AI.
 
-# ΚΡΙΣΙΜΟΙ ΚΑΝΟΝΕΣ
+# ΑΠΟΛΥΤΟΙ ΚΑΝΟΝΕΣ ΛΟΓΙΚΗΣ (ANTI-REVERSE LOOKUP)
 
-1. **ΓΛΩΣΣΑ:**
-   - ΤΕΛΙΚΗ ΑΠΑΝΤΗΣΗ: ΠΑΝΤΑ στα Ελληνικά
-   - ΣΚΕΨΗ (<think>): Σκέψου στα Αγγλικά ή Ελληνικά - ΠΟΤΕ Κινέζικα
-   - Τεχνικοί όροι (API, ROI, CPU) επιτρέπονται στα Αγγλικά
+1. **ΑΠΑΓΟΡΕΥΣΗ ΑΝΤΙΣΤΡΟΦΗΣ ΑΝΑΖΗΤΗΣΗΣ (NO REVERSE LOOKUP):**
+   - Μην χρησιμοποιείς τα νούμερα/ποσότητες (Values) του χρήστη για να βρεις ποια Κατηγορία ταιριάζει.
+   - **Παράδειγμα Λάθους:** "Ο χρήστης ζητάει 5. Η Κατηγορία Χ δίνει 5. Άρα θέλει την Κατηγορία Χ." (ΛΑΘΟΣ)
+   - **Σωστή Λογική:** "Ο χρήστης δεν είπε το όνομα της Κατηγορίας. Άρα η αίτηση είναι ΑΣΑΦΗΣ, ανεξαρτήτως αν το 5 ταιριάζει κάπου."
 
-2. **ΣΚΕΨΗ vs ΑΠΑΝΤΗΣΗ:**
-   - Μέσα στο <think>: Think in English. Analyze the query, plan the response structure, consider key points.
-   - ΤΕΛΙΚΗ ΑΠΑΝΤΗΣΗ: Σύντομη, ουσιαστική, φυσική - σαν να μιλάς σε φίλο
-   
-3. **ΜΟΡΦΗ ΑΠΑΝΤΗΣΗΣ:**
-   - Μίλα φυσικά, όχι σαν αναφορά ή έκθεση
-   - Αποφυγή bullet points εκτός αν ζητηθούν
-   - Αποφυγή επαναλήψεων και περιττών εξηγήσεων
-   - Μέγιστο 2-3 προτάσεις για απλές ερωτήσεις
-   - Μέγιστο 1 παράγραφος για πιο σύνθετα θέματα
+2. **ΑΡΧΗ ΤΗΣ ΟΝΟΜΑΣΤΙΚΗΣ ΤΑΥΤΟΠΟΙΗΣΗΣ:**
+   - Η Κατηγορία (Category) αναγνωρίζεται ΜΟΝΟ από λέξεις-κλειδιά (Keywords) και ΠΟΤΕ από νούμερα.
+   - Αν λείπει η λέξη-κλειδί -> ΡΩΤΑ.
 
-4. **EARLY STOPPING:**
-   - Όταν η απάντηση είναι ολοκληρωμένη, ΣΤΑΜΑΤΑ
-   - ΜΗΝ προσθέτεις περισσότερα αν δεν χρειάζονται
-   - Απλές ερωτήσεις = σύντομες απαντήσεις
+3. **ΓΛΩΣΣΑ:**
+   - ΤΕΛΙΚΗ ΑΠΑΝΤΗΣΗ: ΠΑΝΤΑ στα Ελληνικά.
+   - ΣΚΕΨΗ (<think>): Σκέψου στα Αγγλικά.
 
-5. **ΠΟΤΕ ΜΗΝ:**
-   - Μην αρχίζεις με "Βεβαίως!", "Φυσικά!", "Καλή ερώτηση!"
-   - Μην επαναλαμβάνεις την ερώτηση
-   - Μην εξηγείς τι θα κάνεις - απλά κάντο
-   - Μην δίνεις περισσότερες πληροφορίες από ότι ζητήθηκαν
-   - Μην γράφεις Κινέζικα ούτε στη σκέψη
+4. **ΔΙΑΔΙΚΑΣΙΑ ΣΚΕΨΗΣ (<think>):**
+   - Step 1: Scan for TEXT KEYWORDS defining the Category. Ignore numbers.
+   - Step 2: If Keyword missing -> STOP. Ignore that numbers might match a rule. Ask Clarification.
+   - Step 3: If Keyword found -> Check Prerequisites & Limits.
 
-# ΒΑΣΗ ΓΝΩΣΕΩΝ
+# ΧΕΙΡΙΣΜΟΣ ΑΣΑΦΕΙΑΣ
 
-Όταν υπάρχουν <knowledge_base> tags:
-- Χρησιμοποίησε τις πληροφορίες για να απαντήσεις
-- Μην αναφέρεις ότι "βρήκες" ή "είδες" κάτι - απλά απάντα
-
-# ΠΑΡΑΔΕΙΓΜΑΤΑ
-
-Ερώτηση: "1+1;"
-<think>Simple math: 1+1=2. Direct answer needed.</think>
-2
-
-Ερώτηση: "Τι ώρα είναι;"
-<think>User asks for time. I don't have real-time access. Brief response.</think>
-Δεν έχω πρόσβαση στην τρέχουσα ώρα.
-
-Ερώτηση: "Πώς δουλεύει το RAG;"
-<think>RAG explanation needed. Keep it concise but informative in Greek.</think>
-Το RAG ανακτά σχετικά έγγραφα από μια βάση δεδομένων και τα χρησιμοποιεί ως context για να δώσει πιο ακριβείς απαντήσεις.
-
-Ερώτηση: "Γεια σου"
-<think>Simple greeting. Respond briefly in Greek.</think>
-Γεια! Πώς μπορώ να βοηθήσω;
+ΛΑΘΟΣ: "Ζητάς 5 ημέρες, και βλέπω στον κανονισμό ότι αυτό αντιστοιχεί στον Γάμο. Εγκρίνεται."
+ΣΩΣΤΟ: "Ζητάς 5 ημέρες, αλλά δεν διευκρινίζεις τον λόγο/κατηγορία της άδειας. Παρακαλώ διευκρίνισε."
 """
 
 
@@ -167,7 +137,7 @@ class AgentResponse:
 
 
 # ============================================================================
-# File Server Detection (NEW)
+# File Server Detection
 # ============================================================================
 
 def is_file_server_query(query: str) -> bool:
@@ -341,42 +311,65 @@ class PromptBuildStep(PipelineStep):
         return "Prompt Building"
     
     def process(self, context: Context) -> Context:
+        """
+        Build the prompt with fast cross-reference logic.
+        """
+        # Handle analysis results (from workflow/tool execution)
         analysis_result = context.metadata.get('analysis_result')
         if analysis_result and analysis_result.get('success'):
             data = analysis_result.get('data', {})
-            analysis_text = self._format_analysis(data.get('anomalies', []), data.get('summary', {}))
-            prompt = f"<|im_start|>system\n{self.system_prompt}\n<|im_end|>\n<|im_start|>user\n{context.query}\n\nDATA_ANALYSIS:\n{analysis_text}\n<|im_end|>\n<|im_start|>assistant\n"
+            analysis_text = self._format_analysis(
+                data.get('anomalies', []), 
+                data.get('summary', {})
+            )
+            prompt = (
+                f"<|im_start|>system\n{self.system_prompt}\n<|im_end|>\n"
+                f"<|im_start|>user\n{context.query}\n\n"
+                f"DATA_ANALYSIS:\n{analysis_text}\n<|im_end|>\n"
+                f"<|im_start|>assistant\n"
+            )
             context.metadata["prompt"] = prompt
             return context
         
-        kb_section = ""
-        rag_context = context.metadata.get("rag_context", [])
-        if rag_context:
-            kb_parts = []
-            for i, result in enumerate(rag_context[:self.MAX_RAG_DOCS], 1):
-                content = result.get("content", result.get("page_content", ""))
-                source = result.get("metadata", {}).get("fileName", f"src_{i}")
-                kb_parts.append(f"REFERENCE_SOURCE_{i} (File: {source}):\n{content[:self.MAX_RAG_CONTENT_PER_DOC]}\n---")
-            kb_section = f"\n<knowledge_base>\n{''.join(kb_parts)}\n</knowledge_base>\n"
+        # Build knowledge base section from RAG results
+        kb_section = self._build_knowledge_base_section(context)
         
-        history_section = ""
-        if context.chat_history:
-            history_parts = [f"{m.get('role')}: {m.get('content')[:self.MAX_MESSAGE_LENGTH]}" for m in context.chat_history[-self.MAX_HISTORY_MESSAGES:]]
-            history_section = f"\n<history>\n{chr(10).join(history_parts)}\n</history>\n"
+        # Build chat history section
+        history_section = self._build_history_section(context)
         
-        # GENERALIZED LOGIC PROTOCOL - Scenario Agnostic
+        # Get current date for context
+        current_date = datetime.now().strftime("%d/%m/%Y")
+        
+        # COMPACT LOGIC PROTOCOL - STRICT ANTI-REVERSE LOOKUP
         prompt = f"""<|im_start|>system
 {self.system_prompt}
 
-# ΠΡΩΤΟΚΟΛΛΟ ΛΟΓΙΚΗΣ ΕΠΕΞΕΡΓΑΣΙΑΣ:
-1. **Fact Harvesting:** Εντόπισε όλες τις τιμές (ημερομηνίες, υπόλοιπα, status) που αφορούν την οντότητα του χρήστη στην <knowledge_base>.
-2. **Global Constraints:** Εντόπισε κανόνες που λειτουργούν ως "πύλες" (π.χ. ελάχιστος χρόνος, βασικό status) και πρέπει να πληρούνται ΠΡΙΝ εξεταστεί οποιαδήποτε επιμέρους κατηγορία.
-3. **Variable Validation:** Σύγκρινε τα δεδομένα του Βήματος 1 με τους κανόνες του Βήματος 2. Αν υπάρχει απόκλιση, η απάντηση είναι αρνητική και εξηγεί το κώλυμα.
-4. **Anti-Hallucination Policy:** Αν μια ποσοτική τιμή (π.χ. "5 ημέρες", "100 ευρώ") ταιριάζει με μια κατηγορία αλλά ο χρήστης δεν την έχει ορίσει ρητά, ΑΠΑΓΟΡΕΥΕΤΑΙ να την επιλέξεις. Ζήτησε διευκρίνιση για την αιτιολογία.
+# LOGIC PROTOCOL (ANTI-REVERSE LOOKUP):
+Date: {current_date}
 
-# FORMAT:
-- Ξεκίνα με <think> για την ανάλυση και κλείσε με </think>.
-- Η τελική απάντηση στα Ελληνικά.
+Perform this EXACT internal check in <think>:
+
+1. **KEYWORD SCAN (CRITICAL):**
+   - Does the user text contain an EXPLICIT NAME for the Request Category?
+   - **Ignore numbers/dates during this step.**
+   - FOUND_NAME: [Yes/No]
+
+2. **AMBIGUITY CHECK:**
+   - **IF FOUND_NAME = NO:** - STOP. 
+     - DO NOT check if the numbers match any rule in the context.
+     - DECISION: ASK CLARIFICATION.
+   - **IF FOUND_NAME = YES:** - Proceed to Validation.
+
+3. **VALIDATION (Only if Name is explicit):**
+   - Check Prerequisites vs User Data.
+   - Check Limits vs Requested Quantity.
+
+4. **DECISION:**
+   - Ambiguous -> ASK.
+   - Valid -> APPROVE.
+   - Invalid -> REJECT.
+
+*Keep thinking concise.*
 
 CONTEXT:
 {kb_section}{history_section}<|im_end|>
@@ -388,13 +381,75 @@ CONTEXT:
         context.metadata["prompt"] = prompt
         return context
     
+    def _build_knowledge_base_section(self, context: Context) -> str:
+        """
+        Build the knowledge base section from RAG results.
+        
+        Args:
+            context: Execution context with rag_context in metadata
+            
+        Returns:
+            Formatted knowledge base section string
+        """
+        rag_context = context.metadata.get("rag_context", [])
+        if not rag_context:
+            return ""
+        
+        kb_parts = []
+        for i, result in enumerate(rag_context[:self.MAX_RAG_DOCS], 1):
+            content = result.get("content", result.get("page_content", ""))
+            source = result.get("metadata", {}).get("fileName", f"src_{i}")
+            truncated_content = content[:self.MAX_RAG_CONTENT_PER_DOC]
+            kb_parts.append(
+                f"REFERENCE_SOURCE_{i} (File: {source}):\n{truncated_content}\n---"
+            )
+        
+        return f"\n<knowledge_base>\n{''.join(kb_parts)}\n</knowledge_base>\n"
+    
+    def _build_history_section(self, context: Context) -> str:
+        """
+        Build the chat history section.
+        
+        Args:
+            context: Execution context with chat_history
+            
+        Returns:
+            Formatted history section string
+        """
+        if not context.chat_history:
+            return ""
+        
+        recent_messages = context.chat_history[-self.MAX_HISTORY_MESSAGES:]
+        history_parts = []
+        for msg in recent_messages:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')[:self.MAX_MESSAGE_LENGTH]
+            history_parts.append(f"{role}: {content}")
+        
+        return f"\n<history>\n{chr(10).join(history_parts)}\n</history>\n"
+    
     def _format_analysis(self, anomalies: List[Dict], summary: Dict) -> str:
+        """
+        Format analysis results for inclusion in prompt.
+        
+        Args:
+            anomalies: List of detected anomalies
+            summary: Summary dictionary
+            
+        Returns:
+            Formatted analysis text
+        """
         lines = []
-        if summary: lines.append(f"Summary: {summary.get('total_anomalies', 0)} detected")
-        for a in anomalies[:5]:
-            lines.append(f"- [{a.get('severity', 'LOW')}] {a.get('description', '')[:100]}")
+        if summary:
+            lines.append(f"Summary: {summary.get('total_anomalies', 0)} detected")
+        
+        for anomaly in anomalies[:5]:
+            severity = anomaly.get('severity', 'LOW')
+            description = anomaly.get('description', '')[:100]
+            lines.append(f"- [{severity}] {description}")
+        
         return "\n".join(lines)
- 
+
 class LLMGenerationStep(PipelineStep):
     """Generates response using LLM with thinking extraction."""
     
@@ -415,6 +470,7 @@ class LLMGenerationStep(PipelineStep):
             
             logger.info(f"Generating with max_new_tokens={max_tokens}")
             
+            # Note: We let the model run constraints, but system prompt enforces brevity
             raw_response = self.llm.generate(
                 prompt,
                 max_tokens=max_tokens,
