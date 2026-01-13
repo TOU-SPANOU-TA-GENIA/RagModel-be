@@ -1,28 +1,10 @@
-# app/chat/__init__.py
-"""
-Chat session management module.
-"""
-
-from app.chat.manager import (
-    create_chat,
-    list_chats,
-    get_chat,
-    append_message,
-    get_history,
-    update_chat_title,
-    delete_chat,
-    clear_all_chats,
-    get_stats
-)
+from .service import chat_service, ChatService
+from .schemas import ChatSession, ChatMessage, ChatSummary
 
 __all__ = [
-    "create_chat",
-    "list_chats",
-    "get_chat",
-    "append_message",
-    "get_history",
-    "update_chat_title",
-    "delete_chat",
-    "clear_all_chats",
-    "get_stats"
+    "chat_service",
+    "ChatService",
+    "ChatSession", 
+    "ChatMessage", 
+    "ChatSummary"
 ]

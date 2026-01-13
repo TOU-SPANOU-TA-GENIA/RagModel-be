@@ -23,7 +23,7 @@ huggingface-cli download Qwen/Qwen3-4B  --local-dir ./offline_models/qwen3-4b  -
 python scripts/setup_auth.py
 
 # 5. Start server
-python scripts/run.py --full
+python scripts/run.py
 
 # 6. Chat!
 python tests/cli/authenticated_chat_client.py

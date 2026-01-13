@@ -1,14 +1,9 @@
-# app/utils/__init__.py
-"""
-Utility modules.
-"""
-
-from app.utils.logger import setup_logger
-from app.utils.gpu import get_gpu_info, clear_gpu_cache, log_gpu_memory
+from .logger import setup_logger
+from .gpu import get_torch_device_info, clear_gpu_memory, get_optimal_device
 
 __all__ = [
     "setup_logger",
-    "get_gpu_info",
-    "clear_gpu_cache",
-    "log_gpu_memory"
+    "get_torch_device_info", 
+    "clear_gpu_memory", 
+    "get_optimal_device"
 ]

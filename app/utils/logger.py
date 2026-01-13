@@ -1,44 +1,42 @@
-# app/utils/logger.py
-"""
-Logging configuration and utilities.
-"""
-
 import logging
 import sys
+from typing import Optional
 
-
-def setup_logger(name: str, level: str = None, log_format: str = None) -> logging.Logger:
+def setup_logger(name: str, level: Optional[str] = None) -> logging.Logger:
     """
     Configure and return a logger instance.
-    
-    Args:
-        name: Logger name (usually __name__)
-        level: Log level (DEBUG, INFO, WARNING, ERROR)
-        log_format: Custom log format string
+    Reads 'server.log_level' from config if available.
     """
-    # Import here to avoid circular imports during startup
-    try:
-        from app.config import SERVER
-        default_level = SERVER.log_level
-        default_format = SERVER.log_format
-    except ImportError:
-        default_level = "INFO"
-        default_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    
-    level = level or default_level
-    log_format = log_format or default_format
-    
     logger = logging.getLogger(name)
     
-    # Avoid duplicate handlers
+    # Singleton-like: Avoid adding duplicate handlers if already configured
     if logger.handlers:
         return logger
     
-    logger.setLevel(getattr(logging, level))
+    # 1. Determine Log Level
+    # We import inside the function to avoid Circular Dependency:
+    # ConfigManager -> imports Logger -> imports ConfigManager
+    try:
+        from app.config import SERVER
+        # Use getattr to be safe against schema changes
+        default_level = getattr(SERVER, "log_level", "INFO")
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    except ImportError:
+        # Fallback for when logger is used before config is fully loaded
+        default_level = "INFO"
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     
-    # Console handler
+    final_level = level or default_level
+    
+    # 2. Configure Logger
+    try:
+        logger.setLevel(final_level.upper())
+    except ValueError:
+        logger.setLevel(logging.INFO)
+    
+    # 3. Setup Console Handler
     handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(getattr(logging, level))
+    handler.setLevel(logger.level)
     
     formatter = logging.Formatter(log_format)
     handler.setFormatter(formatter)

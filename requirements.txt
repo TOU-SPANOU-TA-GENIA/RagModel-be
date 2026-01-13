@@ -1,35 +1,29 @@
-# Authentication & Database
-passlib==1.7.4
-redis==5.0.1
-bcrypt==4.0.1
-python-jose[cryptography]==3.3.0
-email-validator
+# --- Core Server ---
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+pydantic>=2.6.0
+requests>=2.31.0
 
-# dependencies
-fastapi
-uvicorn[standard]
-pydantic
-python-multipart
+# --- Database & Auth ---
+sqlalchemy>=2.0.25
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
 
-transformers
-accelerate
-sentencepiece
+# --- LLM & AI (Local) ---
+torch>=2.2.0 --index-url https://download.pytorch.org/whl/cu121
+transformers>=4.37.0
+accelerate>=0.27.0
+bitsandbytes>=0.42.0
+sentence-transformers>=2.3.1
+optimum>=1.16.0
 
-langchain
-langchain-community
+# --- RAG & Search ---
+faiss-cpu>=1.7.4
+langchain>=0.1.0
+langchain-community>=0.0.10
 
-torch
-torchvision
-torchaudio
-sentence-transformers
-
-huggingface-hub
-
-python-dotenv
-aiofiles
-
-bitsandbytes
-hf_xet
-
-python-docx
-python-pptx
+# --- Utilities & File Processing ---
+python-docx>=1.1.0
+watchdog>=4.0.0
+schedule>=1.2.1

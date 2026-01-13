@@ -1,165 +1,188 @@
 {
-  "llm": {
-    "model_name": "./offline_models/qwen3-4b",
-    "max_new_tokens": 250,
-    "trust_remote_code": true,
-    "temperature": 0.7,
-    "top_p": 0.9,
-    "repetition_penalty": 1.1,
-    "do_sample": true,
-    "quantization": "4bit",
-    "device": "auto",
-    "prewarm_enabled": true,
-    "prewarm_prompts": ["Hello", "Hi", "Hey"],
-    "prewarm_delay": 0.5
-  },
-  "embedding": {
-    "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-    "dimension": 384,
-    "normalize": true,
-    "batch_size": 32,
-    "cache_enabled": true,
-    "max_cache_size": 10000
-  },
-  "rag": {
-    "top_k": 3,
-    "min_relevance_score": 0.5,
-    "chunk_size": 500,
-    "chunk_overlap": 50,
-    "use_faiss": false,
-    "rerank_enabled": false
-  },
-  "agent": {
-    "mode": "production",
-    "debug_mode": false,
-    "use_cache": false,
-    "max_tool_retries": 2,
-    "tool_timeout": 30.0,
-    "action_keyword_weight": 1.5,
-    "question_keyword_weight": 1.0,
-    "conversation_keyword_weight": 0.5,
-    "min_confidence_threshold": 0.5
-  },
-  "tools": {
-    "max_file_size_mb": 50,
-    "allowed_extensions": [".txt", ".md", ".text", ".json", ".yaml", ".yml", ".conf", ".config", ".cfg", ".log", ".py", ".sh", ".bash", ".xml", ".html", ".csv", ".pdf", ".docx", ".xlsx", ".pptx"],
-    "allowed_commands": ["ls", "pwd", "echo", "date", "whoami", "df", "free"],
-    "show_file_content": true,
-    "file_content_format": "pretty",
-    "max_content_display_lines": null
-  },
-  "memory": {
-    "max_history": 10,
-    "context_window": 4096,
-    "summarize_after": 5,
-    "include_system_in_context": true
-  },
   "server": {
     "host": "0.0.0.0",
     "port": 8000,
-    "workers": 1,
-    "cors_origins": ["*"],
     "log_level": "INFO",
-    "log_format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    "cors_origins": [
+      "http://localhost:4200",
+      "http://localhost:3000"
+    ],
+    "enable_docs": true,
+    "debug_mode": false
   },
   "paths": {
     "base_dir": ".",
     "data_dir": "data",
     "index_dir": "faiss_index",
     "outputs_dir": "outputs",
-    "offload_dir": "offload",
     "offline_models_dir": "offline_models"
   },
-  "documents": {
-    "default_format": "docx",
-    "include_metadata": true,
-    "template_dir": "templates"
+  "security": {
+    "secret_key": "CHANGE_THIS_TO_A_LONG_RANDOM_STRING_IN_PRODUCTION",
+    "algorithm": "HS256",
+    "access_token_expire_minutes": 60,
+    "users": [
+      {
+        "username": "admin",
+        "full_name": "System Administrator",
+        "email": "admin@example.com",
+        "hashed_password": "",
+        "disabled": false
+      },
+      {
+        "username": "test",
+        "hashed_password": "$2b$12$DtvWow1t32.yC67pGrkQC.T6ANt6SQk5hkwN.71d16VuUtArba0qW",
+        "full_name": "test",
+        "email": "test@test.com",
+        "disabled": false
+      },
+      {
+        "username": "test1",
+        "hashed_password": "$2b$12$WsgC5jef9mrdGJ36VNDkcOEYlVwiuWdjN8tKZIyym.RjY.s/.B6RC",
+        "full_name": "test1",
+        "email": "test1@test.com",
+        "disabled": false
+      }
+    ]
   },
-  "response": {
-    "max_response_length": 10000,
-    "use_markdown": true,
-    "include_sources": true,
-    "stream_responses": true
+  "llm": {
+    "provider": "local",
+    "model_path": "./offline_models/qwen3-4b",
+    "device": "auto",
+    "quantization": "4bit",
+    "max_new_tokens": 1024,
+    "temperature": 0.3,
+    "top_p": 0.9,
+    "repetition_penalty": 1.1,
+    "prompt_style": "qwen",
+    "show_thinking": true
+  },
+  "rag": {
+    "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "chunk_size": 500,
+    "chunk_overlap": 50,
+    "top_k": 3,
+    "min_relevance_score": 0.35,
+    "enable_rag": true
+  },
+  "agent": {
+    "mode": "production",
+    "system_prompt_key": "greek_military",
+    "rag_on_tools": false,
+    "use_llm_routing": false,
+    "intent_patterns": {
+      "chat": [
+        "γεια",
+        "καλημέρα",
+        "ποιος είσαι",
+        "hello",
+        "hi"
+      ],
+      "system_diagnostics": [
+        "έλεγχος συστήματος",
+        "system check",
+        "status",
+        "gpu",
+        "υγεία"
+      ],
+      "analyze_document": [
+        "ανάλυσε",
+        "αναφορά",
+        "briefing",
+        "analyze",
+        "logistics",
+        "audit"
+      ],
+      "search_knowledge_base": [
+        "βρες",
+        "search",
+        "κανονισμός",
+        "νόμος",
+        "διαταγή",
+        "σύμφωνα με"
+      ]
+    }
+  },
+  "tools": {
+    "read_file": {
+      "enabled": true
+    },
+    "write_file": {
+      "enabled": true
+    },
+    "list_files": {
+      "enabled": true
+    },
+    "search_knowledge_base": {
+      "enabled": true
+    },
+    "system_diagnostics": {
+      "enabled": true
+    },
+    "analyze_document": {
+      "enabled": true
+    }
+  },
+  "prompt_templates": {
+    "greek_military": "Είσαι ένας εξειδικευμένος στρατιωτικός βοηθός AI (Qwen). Απαντάς πάντα στα Ελληνικά με ακρίβεια και σοβαρότητα. Χρησιμοποίησε τα εργαλεία για να επιβεβαιώσεις πληροφορίες.",
+    "default_english": "You are a helpful AI assistant."
   },
   "network_filesystem": {
     "enabled": true,
     "auto_start_monitoring": true,
+    "force_polling": true,
+    "polling_interval": 10,
     "shares": [
       {
-        "name": "shared_docs",
-        "mount_path": "Z:",
-        "share_type": "smb",
-        "enabled": true,
-        "auto_index": true,
-        "watch_for_changes": true,
-        "scan_interval": 300,
-        "include_extensions": [".txt", ".md", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".json", ".yaml", ".ppt", ".pptx", ".log", ".xml", ".html"],
-        "exclude_patterns": [".*", "~$*", "Thumbs.db", "desktop.ini", "*.tmp", "*.temp", "$RECYCLE.BIN", "System Volume Information"],
-        "max_file_size_mb": 100
+        "path": "Z:",
+        "auto_index": true
       }
     ]
   },
-  "streaming": {
-    "enabled": true,
-    "token_timeout": 120,
-    "skip_prompt": true,
-    "skip_special_tokens": true,
-    "chunk_delay_ms": 20
-  },
-  "response_cleaning": {
-    "enabled": true,
-    "clean_thinking": true,
-    "clean_xml_tags": true,
-    "clean_meta_commentary": true,
-    "normalize_whitespace": true,
-    "stop_tokens": ["<|im_end|>", "<|endoftext|>", "</s>", "<|im_start|>", "[PAD]", "<pad>", "<eos>"],
-    "custom_patterns": []
-  },
-  "models": {
-    "active": "qwen3-4b",
-    "registry": {
-      "qwen3-4b": {
-        "family": "qwen",
-        "path": "./offline_models/qwen3-4b",
-        "thinking_tags": {
-          "start": ["<think>", "<thinking>", "<σκέψη>"],
-          "end": ["</think>", "</thinking>", "</σκέψη>"]
-        },
-        "response_tags": {
-          "start": ["<response>", "<απάντηση>"],
-          "end": ["</response>", "</απάντηση>"]
-        },
-        "stop_tokens": ["<|im_end|>", "<|endoftext|>"],
-        "prompt_template": "qwen_chat",
-        "supports_thinking": true,
-        "trust_remote_code": true
-      }
-    }
-  },
-  "prompt_templates": {
-    "templates": {
-      "qwen_chat": {
-        "system_format": "<|im_start|>system\n{system}<|im_end|>\n",
-        "user_format": "<|im_start|>user\n{user}<|im_end|>\n",
-        "assistant_format": "<|im_start|>assistant\n",
-        "supports_multi_turn": true
-      },
-      "llama3_instruct": {
-        "system_format": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system}<|eot_id|>",
-        "user_format": "<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|>",
-        "assistant_format": "<|start_header_id|>assistant<|end_header_id|>\n\n",
-        "supports_multi_turn": true
-      },
-      "default": {
-        "system_format": "System: {system}\n\n",
-        "user_format": "User: {user}\n\n",
-        "assistant_format": "Assistant: ",
-        "supports_multi_turn": true
-      }
-    }
-  },
   "localization": {
     "default_language": "greek",
-    "force_greek_responses": true
-  }
+    "overrides": {
+      "errors": {
+        "generic": "Παρουσιάστηκε σφάλμα συστήματος.",
+        "file_not_found": "Το αρχείο {path} δεν εντοπίστηκε."
+      },
+      "logs": {
+        "thinking": "Επεξεργασία δεδομένων..."
+      }
+    }
+  },
+  "workflows": [
+    {
+      "id": "daily_system_check",
+      "name": "Daily Health Check",
+      "description": "Runs diagnostics every morning.",
+      "enabled": true,
+      "trigger": {
+        "type": "schedule",
+        "config": {
+          "interval_minutes": 1440
+        }
+      },
+      "steps": [
+        {
+          "id": "step1",
+          "name": "Check Hardware",
+          "tool": "system_diagnostics",
+          "params": {
+            "check_type": "all"
+          },
+          "output_key": "health_report"
+        },
+        {
+          "id": "step2",
+          "name": "Log Result",
+          "tool": "write_file",
+          "params": {
+            "filename": "daily_health_log.txt",
+            "content": "Daily Check Result:\n{{ health_report }}"
+          }
+        }
+      ]
+    }
+  ]
 }
