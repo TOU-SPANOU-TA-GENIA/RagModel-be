@@ -1,7 +1,7 @@
 import json
 import asyncio
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -89,10 +89,29 @@ async def stream_chat(
     body = await request.json()
     content = body.get("content") or body.get("message")
     chat_id = body.get("chat_id") or body.get("chatId")
+    
+    # NEW: General approach to support automation tools
+    stream_mode = body.get("stream", True) 
 
     formatted_messages = [{"role": "user", "content": content}]
 
-    return StreamingResponse(
-        event_generator(str(chat_id), formatted_messages, db),
-        media_type="text/event-stream"
-    )
+    if stream_mode:
+        return StreamingResponse(
+            event_generator(str(chat_id), formatted_messages, db),
+            media_type="text/event-stream"
+        )
+    else:
+        # Automation Mode: Consume the generator and return full JSON
+        full_response = ""
+        # We manually iterate the generator to build the response
+        async for event in event_generator(str(chat_id), formatted_messages, db):
+            # Parse the SSE format: "data: {json}\n\n"
+            clean_line = event.strip().replace("data: ", "")
+            try:
+                data_obj = json.loads(clean_line)
+                if data_obj['type'] == 'token':
+                    full_response += data_obj['data']
+            except:
+                continue
+        
+        return JSONResponse(content={"response": full_response})

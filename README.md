@@ -29,7 +29,7 @@ python scripts/run.py
 python tests/cli/authenticated_chat_client.py
 ```
 
-**Test credentials:** `testuser` / `testpass123`
+**Test credentials:** `test` / `test`
 
 ---
 
