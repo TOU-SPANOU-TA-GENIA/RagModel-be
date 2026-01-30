@@ -6,7 +6,10 @@ AI Agent with RAG, Greek language support, authentication, and persistent chats.
 
 ## Quick Start
 
+
 ```bash
+
+$env:N8N_RESTRICT_FILE_ACCESS_TO="//VM-FILESERVER/SharedDocs/scenario_2_Logistics_Anomaly_Alert_Workflow;//VM-FILESERVER/SharedDocs/Reports"
 # 1. Setup environment
 conda create -n ragmodel_10 python=3.10
 conda activate ragmodel_10
